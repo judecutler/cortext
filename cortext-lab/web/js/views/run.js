@@ -19,13 +19,15 @@ export function renderRun(root, app) {
   const promptEl = h('h1', { class: 'prompt' });
   const subEl = h('div', { class: 'subprompt' });
   const tilesEl = h('div', { class: 'tiles' });
+  const presenterEl = h('div', { class: 'presenter' });
+  const mainEl = h('div', { class: 'main' }, tilesEl, presenterEl);
   const progEl = h('span');
   const phaseEl = h('span');
   const postEl = h('div', { class: 'post' });
   const overlayEl = h('div', { class: 'overlay' });
   const pdEl = h('div', { class: `pd ${settings.photodiode_corner}${settings.photodiode ? ' enabled' : ''}` });
   const stage = h('section', { class: `stage${settings.show_bars ? ' show-bars' : ''}`, dataset: { phase: 'idle' } },
-    h('div', { class: 'stage-top' }, progEl, phaseEl), promptEl, subEl, tilesEl, postEl, overlayEl);
+    h('div', { class: 'stage-top' }, progEl, phaseEl), promptEl, subEl, mainEl, postEl, overlayEl);
 
   const devSections = {};
   const mkSec = (key, title) => { const body = h('div'); devSections[key] = body; return h('div', { class: 'card' }, h('h3', {}, title), body); };
@@ -44,12 +46,19 @@ export function renderRun(root, app) {
   // ---------- stage API used by trial types ----------
   const tileEls = {};
   const barEls = {};
+  const probEls = {};
+  const presEls = {};
+  let layout = 'flash';
   const optLabel = (o) => `${o.letter} (${o.label})`;
 
   const ui = {
     renderTrial(trial) {
       tilesEl.replaceChildren();
-      for (const k in tileEls) delete tileEls[k];
+      presenterEl.replaceChildren();
+      for (const k in tileEls) { delete tileEls[k]; delete probEls[k]; delete presEls[k]; }
+      layout = trial.type === 'mcq_sequential' ? 'sequential' : 'flash';
+      stage.dataset.layout = layout;
+      stage.classList.remove('reveal', 'show-probs');
       tilesEl.style.setProperty('--cols', trial.options.length <= 4 ? 2 : 3);
       const showImg = trial.tile_content !== 'text';
       const showTxt = trial.tile_content !== 'image';
@@ -57,10 +66,17 @@ export function renderRun(root, app) {
         const tile = h('div', { class: 'tile', role: 'button', dataset: { id: o.id }, 'aria-label': `${o.letter}: ${o.label}` },
           showImg && o.image ? h('img', { src: o.image, alt: o.label, draggable: 'false' }) : null,
           h('div', { class: 'label' }, h('span', { class: 'letter' }, o.letter), showTxt ? h('span', {}, o.text) : null),
+          h('div', { class: 'probtext' }),
           h('div', { class: 'bar' }, h('i')));
         tile.addEventListener('pointerdown', (e) => { e.preventDefault(); runner.tileClick(o.id, e.timeStamp); });
-        tileEls[o.id] = tile; barEls[o.id] = tile.querySelector('.bar > i');
+        tileEls[o.id] = tile; barEls[o.id] = tile.querySelector('.bar > i'); probEls[o.id] = tile.querySelector('.probtext');
         tilesEl.append(tile);
+        // One-at-a-time presenter element per option, built up front (so images are decoded before their onset) and
+        // stacked in the same spot; only visibility changes at onset.
+        presEls[o.id] = h('div', { class: 'pstim' },
+          showImg && o.image ? h('img', { src: o.image, alt: o.label, draggable: 'false' }) : null,
+          showTxt ? h('div', { class: 'ptext' }, o.text) : null);
+        presenterEl.append(presEls[o.id]);
       }
       promptEl.textContent = trial.prompt;
       promptEl.classList.remove('show'); subEl.classList.remove('show');
@@ -71,18 +87,37 @@ export function renderRun(root, app) {
     },
     showPrompt() {
       promptEl.classList.add('show');
-      subEl.textContent = 'Silently focus on the answer you think is correct. Do not click until the flashing stops.';
+      subEl.textContent = layout === 'sequential'
+        ? 'Watch each picture as it appears and notice which one answers the question. You will choose afterwards.'
+        : 'Silently focus on the answer you think is correct. Do not click until the flashing stops.';
       subEl.classList.add('show');
       stage.dataset.phase = 'prompt';
     },
     setFlash(id, on) {
-      const t = tileEls[id]; if (t) t.classList.toggle('flash', on);
+      if (on) stage.dataset.phase = 'flash';
+      if (layout === 'sequential') { const p = presEls[id]; if (p) p.classList.toggle('on', on); }
+      else { const t = tileEls[id]; if (t) t.classList.toggle('flash', on); }
       pdEl.classList.toggle('on', on);
     },
-    clearFlash() { Object.values(tileEls).forEach((t) => t.classList.remove('flash')); pdEl.classList.remove('on'); },
+    clearFlash() {
+      Object.values(tileEls).forEach((t) => t.classList.remove('flash'));
+      Object.values(presEls).forEach((p) => p.classList.remove('on'));
+      pdEl.classList.remove('on');
+    },
+    setSub(text) { subEl.textContent = text; subEl.classList.add('show'); },
+    revealTiles() { stage.classList.add('reveal'); },
+    /** Put the model's probability on every choice (call inside the cue frame, after showResponseCue). */
+    showProbabilities(probs, caption) {
+      for (const [id, p] of Object.entries(probs)) {
+        if (probEls[id]) probEls[id].textContent = `${Math.round(p * 100)}%`;
+        if (barEls[id]) barEls[id].style.width = `${(p * 100).toFixed(1)}%`;
+      }
+      stage.classList.add('show-probs');
+      subEl.textContent = `Click the answer you think is correct. ${caption || ''}`;
+    },
     showResponseCue() {
       stage.dataset.phase = 'response';
-      subEl.textContent = 'Now click the answer you chose (or press its key).';
+      subEl.textContent = layout === 'sequential' ? 'Click the answer you think is correct (or press its key).' : 'Now click the answer you chose (or press its key).';
       for (const id in barEls) barEls[id].style.width = '0%';
     },
     showPost(trial, r) {

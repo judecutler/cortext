@@ -16,6 +16,9 @@ import urllib.request
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pw_helpers import set_num, set_select  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 8300 + os.getpid() % 500
 BASE = f"http://127.0.0.1:{PORT}"
@@ -53,10 +56,9 @@ def main():
             page.screenshot(path=os.path.join(SHOTS, "01_setup.png"))
             # small, fast session
             page.fill("input[placeholder='e.g. P01']", "E2E")
-            values = {"n_trials": "3", "repeats": "2", "on_ms": "200", "off_min_ms": "100", "off_max_ms": "150", "prompt_ms": "400"}
-            for key, val in values.items():
-                idx = {"n_trials": 0, "options_per_trial": 1, "repeats": 2, "on_ms": 3, "off_min_ms": 4, "off_max_ms": 5, "prompt_ms": 6}[key]
-                page.locator(".card input[type=number]").nth(idx).fill(val)
+            for label, val in {"Questions": "3", "Repeats per option": "2", "Flash on (ms)": "200", "Gap min (ms)": "100",
+                               "Gap max (ms)": "150", "Prompt shown first (ms)": "400"}.items():
+                set_num(page, label, val)
             page.click("text=Start session")
             page.wait_for_selector(".stage")
             wait_phase(page, "ready")
@@ -183,7 +185,7 @@ def main():
             dl.value.save_as(zpath)
             import zipfile
             z = zipfile.ZipFile(zpath)
-            assert z.testzip() is None and sorted(z.namelist()) == ["markers.csv", "session.json", "trials.csv"], z.namelist()
+            assert z.testzip() is None and sorted(z.namelist()) == ["markers.csv", "model_feedback.csv", "session.json", "trials.csv"], z.namelist()
             tr = list(csv.DictReader(z.read("trials.csv").decode().splitlines()))
             assert len(tr) == 4 and tr[0]["valid"] == "false" and tr[0]["invalid_reason"] == "misclick"
             mk = list(csv.DictReader(z.read("markers.csv").decode().splitlines()))

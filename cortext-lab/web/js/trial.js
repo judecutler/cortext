@@ -1,6 +1,7 @@
 // Pure trial-record logic (no DOM): creation, validity bookkeeping, summaries. Unit-tested in tests/logic.test.mjs.
 import { shuffle, mean, LETTERS } from './util.js';
 import { SCHEMA_VERSION } from './schema.js';
+import { flashParamsFor } from './settings.js';
 
 export function makeTrialRecord({ sessionId, spec, trialId, attempt, rng, settings, byId, wallMs = Date.now() }) {
   const positions = shuffle(spec.option_ids, rng);
@@ -17,10 +18,12 @@ export function makeTrialRecord({ sessionId, spec, trialId, attempt, rng, settin
     prompt: spec.prompt, tile_content: spec.tile_content, options,
     true_answer_id: spec.target_id, true_answer_category: byId[spec.target_id].category,
     clicked_answer_id: null, correct: null, rt_ms: null,
-    flash_params: { on_ms: settings.on_ms, off_min_ms: settings.off_min_ms, off_max_ms: settings.off_max_ms, repeats: settings.repeats },
+    flash_params: flashParamsFor(spec.type, settings),
     flash_order: [], flash_timing: null, early_clicks: [],
     valid: true, invalid_reason: null, invalid_note: '', validity_log: [],
-    status: 'pending', prediction: null, notes: '',
+    status: 'pending', prediction: null,
+    model_display: null,   // set when the model's probabilities were shown to the participant BEFORE the click
+    notes: '',
     created_wall_ms: wallMs, started_wall_ms: null, ended_wall_ms: null,
   };
 }

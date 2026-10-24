@@ -33,7 +33,31 @@ indicators for: bridge connection, LSL outlet, LSL recorder attached, EEG stream
 Hotkeys (run view): `Space`/`Enter` next/start · `Backspace` discard · `R` redo · `1–4` or `A–D` choose answer ·
 `P` pause · `M` Researcher/Demo mode · `Shift+F` fullscreen · `Shift+B` live score bars.
 
-## Trial flow
+## Presentation modes
+
+Pick one under **Setup → Presentation mode**. Both write the same marker schema and the same exports, so the same
+epoching/detector code works for either. "What each stimulus shows" (image / text / image + text) applies to both.
+
+| | **Flash options in place** (original) | **One at a time, then choose** (new) |
+|---|---|---|
+| `trial_type` | `mcq_flash` | `mcq_sequential` |
+| During the EEG phase | all answer tiles stay visible; one lights up at a time (500 ms on, 100–200 ms gap, 10 repeats) | the **question stays on screen**; each option's picture/text appears **alone** for 1 s (default), 0.3 s gap, once per option (default; repeats configurable) |
+| After it | tiles freeze, click your answer | the full multiple-choice grid appears with **the model's probability on every choice**, then you click the correct one |
+| Marker event for each onset | `flash_on` (`extra.mode: "flash"`) | `flash_on` (`extra.mode: "sequential"`) so it epochs identically |
+
+Sequential mode details: the model scores the trial only **after** the last stimulus has gone off, and the numbers are
+shown **after** that, so they cannot touch the EEG window (the test suite checks this). The percentages come from the
+predictor: the mock (clearly labelled, simulated from the true answer), or your model server's `probabilities` field, or,
+if it only sends scores, a softmax of them labelled *uncalibrated*. Untick "Show model probability" to get the same flow
+without the numbers.
+
+**Anchoring caveat:** seeing the model's probabilities can bias the click. Each such trial stores what was shown
+(`model_display`, `model_shown_before_click = true`), the summary page warns about it, and `model_feedback.csv` carries the
+flag. Use those clicks as *feedback* ("the model said 60% for X, the person picked Y, the true answer was Z"), not as
+independent ground truth, and never evaluate the model on them. For `mcq_sequential` the **true answer is known from the
+question**; the click shows whether the person agreed with it, which is what makes it useful feedback.
+
+## Trial flow (flash mode)
 
 1. **Prompt** (default 2 s): question + tiles (image, text, or both).
 2. **Flash phase**: options light up one at a time (default 500 ms on, 100–200 ms random gap, 10 repeats/option).
@@ -101,20 +125,38 @@ expect a constant lag of tens of ms and a jitter of about one frame. Measure the
 * **IndexedDB** (`cortext-lab`: `sessions`, `trials`, `markers`), written as you go (markers flushed every 250 ms and
   on page hide), so a crash loses at most the last quarter second. The app asks the browser for persistent storage;
   still **export after every session** (browsers can evict site data).
-* **Export** (Sessions page, Summary page): one session as a zip (`session.json`, `trials.csv`, `markers.csv`), all
+* **Export** (Sessions page, Summary page): one session as a zip (`session.json`, `trials.csv`, `markers.csv`, `model_feedback.csv`), all
   sessions as one zip (a folder per session), or the single files.
 * `trials.csv` columns: `session_id, trial_id, trial_index, attempt, type, status, valid, invalid_reason,
   invalid_note, prompt, tile_content, option_ids_by_position, true_answer_id, true_answer_category,
   clicked_answer_id, clicked_category, correct, rt_ms, early_clicks, n_flashes, flash_order, flash_on_ms,
   flash_off_min_ms, flash_off_max_ms, repeats, prediction_source, prediction_best_option_id, prediction_confidence,
-  started_wall_ms, ended_wall_ms, notes`. `session.json` additionally holds, per trial, the full per-flash timing
+  model_probabilities, model_shown_before_click, started_wall_ms, ended_wall_ms, notes`. `session.json` additionally holds, per trial, the full per-flash timing
   (`flash_order[]`: scheduled vs actual onset, duration, marker seq) and the validity history.
+* **`model_feedback.csv`** (for improving the model): one row per (trial attempt, option) with `model_probability`,
+  `model_score`, `is_true_answer`, `is_clicked`, `is_model_top_choice`, `human_agrees_with_model`,
+  `model_shown_before_click`, `valid` and the trial/option ids. Join it to `markers.csv` on `(session_id, trial_id,
+  option_id)` to get the EEG epochs. Only trials where the predictor returned probabilities appear.
 * Session record: participant, device (Muse / 8-node / 32-node / Other), notes, seed (option positions and flash
   orders are reproducible from it), settings, measured display refresh, user agent.
 
 ## Stimuli
 
-`web/config/stimuli.json` lists `items` (`id, category, label, text, image`, optional `prompt`, `distractor_set`),
+**Upload (Setup → Stimulus set).** Choose files, choose a folder, or drop files on the box:
+
+* a stimuli `.json` (format below) plus the image files it names, matched **by file name** (folders and upper/lower case
+  are ignored; an item with no `image` picks up a file named `<id>.png/.svg/...`), or
+* **just images**: no `.json` needed. Each image becomes an item (file name = id and label), and the **sub-folder name is the
+  category**: upload `pets/` containing `animals/dog.png`, `animals/cat.png`, `objects/cup.png` and you get categories
+  `animals` and `objects`. Files dropped loose (not as a folder) are all `uncategorized`.
+
+Warnings appear for missing/unused files. Uploaded sets are stored in the browser (IndexedDB; never overwritten, a repeated
+name gets "(2)"), reappear in the "Use" menu after a reload, and each session records which set was used plus the item list
+(file names, not temporary links) in `session.json` (`stimuli_source`, `stimuli_snapshot`). The image files themselves are not
+exported, so keep your original folder. Audio files can be uploaded and are stored on the item but are **not played yet**.
+Use "Download example config" in setup for a template.
+
+The config format: `web/config/stimuli.json` lists `items` (`id, category, label, text, image`, optional `prompt`, `distractor_set`),
 `prompts` per category, `distractor_sets` (`all`, `same_category`, or explicit `members`) and an optional
 `trial_plan` (explicit `{target, options[], tile_content, prompt}` questions). Add categories/items by editing the JSON
 and dropping files in `web/stimuli/`; no code changes. The sample set is 6 animals, 3 objects, 3 shapes, drawn from
@@ -129,7 +171,9 @@ Setup → Predictor: `off`, `mock`, or `ws` (default `ws://localhost:8765`).
   summary keeps mock and real predictions separate.
 * **ws**: protocol in `tools/mock_predictor_server.py` (a runnable template that returns random scores). The app sends
   `trial_start` (options, no labels), a `flash` message per flash (option id, repeat, timestamps) and `trial_end`; the
-  server may push `live` scores any time and must answer `trial_end` with `prediction`. **`is_target` and the true
+  server may push `live` scores any time and must answer `trial_end` with `prediction`; add `probabilities` (`{option_id: p}`)
+  to that message to control the percentages shown in sequential mode. With "Send answer back to model server" ticked, the
+  app also sends a `feedback` message *after* each trial (true answer, click, validity, `model_shown_before_click`). **`is_target` and the true
   answer are never sent to the predictor**, so a model cannot see the labels. Live bars under the tiles
   (`Shift+B`, demo use) change the screen during flashing, so leave them off for recordings.
 
@@ -167,8 +211,8 @@ Setup → Predictor: `off`, `mock`, or `ws` (default `ws://localhost:8765`).
 
 ```
 bridge/    bridge.py (HTTP + WebSocket + LSL + CSV), wsproto.py (RFC 6455 helpers), logs/ (git-ignored)
-web/       index.html, timing.html, css/, js/ (app, session, trialtypes/, views/, flasher, markers, db, …),
+web/       index.html, timing.html, css/, js/ (app, session, trialtypes/, views/, flasher, markers, db, stimulusSets, …),
            config/stimuli.json, stimuli/*.svg
 tools/     analyze_timing.py, mock_predictor_server.py
-tests/     logic.test.mjs, test_bridge.py, test_bridge_lsl.py, e2e.py       (see TEST_PLAN.md)
+tests/     logic.test.mjs, test_bridge.py, test_bridge_lsl.py, e2e*.py       (see TEST_PLAN.md)
 ```

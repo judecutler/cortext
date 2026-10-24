@@ -10,7 +10,7 @@
 //   }
 //
 // ctx (see session.js `_makeCtx`):
-//   ctx.settings, ctx.ui (stage API), ctx.markers, ctx.predictor, ctx.rng
+//   ctx.settings, ctx.ui (stage API; see views/run.js), ctx.markers, ctx.predictor, ctx.rng
 //   ctx.mark(event, fields)              emit a trial-scoped marker (adds trial_id, trial_index, true_answer_id)
 //   ctx.frame(fn) -> Promise<frameTs>    run fn inside the next requestAnimationFrame callback
 //   ctx.guard(promise)                   rejects with InterruptError if the operator interrupts
@@ -20,6 +20,7 @@
 //
 // To add a type: create a file, export an object like the above, and call registerTrialType() below.
 import { mcqFlash } from './mcq_flash.js';
+import { mcqSequential } from './mcq_sequential.js';
 import { stubTypes } from './stubs.js';
 
 const registry = new Map();
@@ -28,4 +29,5 @@ export const getTrialType = (id) => registry.get(id);
 export const listTrialTypes = () => [...registry.values()];
 
 registerTrialType(mcqFlash);
+registerTrialType(mcqSequential);
 stubTypes.forEach(registerTrialType);

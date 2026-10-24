@@ -33,9 +33,13 @@ export class Predictor {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
       if (m.type === 'live') this._live(m.p300 || {}, m.category_scores);
       else if (m.type === 'prediction' && this._resolve && (this._trial == null || m.trial_id === this._trial.trial_id)) {
+        // Probabilities: use the server's own if it sends them ("probabilities": {option_id: p}); otherwise a plain
+        // softmax of its scores, flagged as uncalibrated so nobody mistakes it for a calibrated probability.
+        const own = m.probabilities && Object.keys(m.probabilities).length ? m.probabilities : null;
+        const probabilities = own || (m.p300 && Object.keys(m.p300).length ? softmax(m.p300, 1) : null);
         this._resolve({
           source: 'ws', best_option_id: m.best_option_id, confidence: m.confidence, p300: m.p300 || {},
-          category_scores: m.category_scores || {},
+          category_scores: m.category_scores || {}, probabilities, probabilities_calibrated: !!own,
         });
         this._resolve = null;
       }
@@ -76,7 +80,8 @@ export class Predictor {
     if (!t) return null;
     if (this.mode === 'mock') {
       const avg = Object.fromEntries(Object.keys(this._sum).map((k) => [k, this._sum[k] / Math.max(1, this._n[k])]));
-      return { source: 'mock', ...argmaxSoftmax(avg), p300: avg, category_scores: {} };
+      const best = argmaxSoftmax(avg);
+      return { source: 'mock', ...best, p300: avg, category_scores: {}, probabilities: softmax(avg, 3), probabilities_calibrated: false };
     }
     if (this.mode === 'ws') {
       const p = new Promise((res) => { this._resolve = res; });
@@ -85,6 +90,28 @@ export class Predictor {
     }
     return null;
   }
+}
+
+/** Optional feedback after a trial (opt-in in setup). Sent AFTER the trial, never during it. */
+Predictor.prototype.sendFeedback = function (trial) {
+  if (this.mode !== 'ws') return false;
+  this._send({
+    type: 'feedback', session_id: trial.session_id, trial_id: trial.trial_id, trial_index: trial.trial_index,
+    options: trial.options.map((o) => ({ id: o.id, category: o.category, position: o.position })),
+    true_answer_id: trial.true_answer_id, clicked_answer_id: trial.clicked_answer_id, correct: trial.correct,
+    valid: trial.valid, invalid_reason: trial.invalid_reason, model_shown_before_click: !!trial.model_display,
+  });
+  return true;
+};
+
+/** Softmax over an {id: score} object -> {id: probability}. k = inverse temperature. */
+export function softmax(scores, k = 1) {
+  const ids = Object.keys(scores);
+  if (!ids.length) return {};
+  const mx = Math.max(...ids.map((i) => k * scores[i]));
+  const ex = ids.map((i) => Math.exp(k * scores[i] - mx));
+  const z = ex.reduce((a, b) => a + b, 0);
+  return Object.fromEntries(ids.map((id, i) => [id, ex[i] / z]));
 }
 
 function argmaxSoftmax(scores, k = 3) {

@@ -11,10 +11,19 @@ Protocol (JSON text frames)
   app -> server  {"type":"flash","trial_id","option_id","flash_index","repeat_index","t_ms","wall_ms"}
   app -> server  {"type":"trial_end","trial_id"}
   server -> app  {"type":"live","trial_id","p300":{option_id: score},"category_scores":{category: score}}   (any time)
-  server -> app  {"type":"prediction","trial_id","best_option_id","confidence","p300":{...},"category_scores":{...}}
+  server -> app  {"type":"prediction","trial_id","best_option_id","confidence","p300":{...},"category_scores":{...},
+                  "probabilities":{option_id: p}}          # optional but recommended, see below
+  app -> server  {"type":"feedback","session_id","trial_id","options":[...],"true_answer_id","clicked_answer_id","correct",
+                  "valid","invalid_reason","model_shown_before_click"}   # only if "Send answer back" is ticked; AFTER the trial
+
+"probabilities" are what the one-at-a-time mode prints on each answer choice. If you leave them out, the app shows a plain
+softmax of "p300" and labels it uncalibrated. Send calibrated probabilities if you have them.
+`feedback` arrives after the trial is over (never during it). Use it for online learning/calibration, but keep those
+trials out of any held-out evaluation, and note `model_shown_before_click`: the click may have been anchored on your numbers.
 """
 import argparse
 import json
+import math
 import os
 import random
 import socket
@@ -69,8 +78,13 @@ class H(socketserver.StreamRequestHandler):
             elif msg["type"] == "trial_end":
                 avg = {k: scores[k] / max(1, counts[k]) for k in scores}
                 best = max(avg, key=avg.get) if avg else None
+                z = sum(math.exp(v) for v in avg.values()) or 1.0
+                probs = {k: math.exp(v) / z for k, v in avg.items()}      # <- replace with calibrated probabilities
                 send({"type": "prediction", "trial_id": msg["trial_id"], "best_option_id": best,
-                      "confidence": 1.0 / max(1, len(avg)), "p300": avg, "category_scores": {}})
+                      "confidence": probs.get(best, 0.0), "p300": avg, "category_scores": {}, "probabilities": probs})
+            elif msg["type"] == "feedback":
+                print(f"feedback: trial {msg['trial_id']} true={msg['true_answer_id']} clicked={msg['clicked_answer_id']} "
+                      f"valid={msg['valid']} model_shown_before_click={msg['model_shown_before_click']}")
 
 
 class Server(socketserver.ThreadingTCPServer):

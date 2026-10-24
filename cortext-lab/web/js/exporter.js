@@ -1,7 +1,7 @@
 // Export: trial table, marker table, session JSON, and a tiny store-only ZIP writer (no dependencies).
 import { db } from './db.js';
 import { toCSV, downloadBlob } from './util.js';
-import { MARKER_COLUMNS, TRIAL_COLUMNS, SCHEMA_VERSION } from './schema.js';
+import { MARKER_COLUMNS, TRIAL_COLUMNS, FEEDBACK_COLUMNS, SCHEMA_VERSION } from './schema.js';
 
 export function trialRow(t) {
   const clicked = (t.options || []).find((o) => o.id === t.clicked_answer_id);
@@ -18,9 +18,34 @@ export function trialRow(t) {
     flash_on_ms: t.flash_params?.on_ms, flash_off_min_ms: t.flash_params?.off_min_ms, flash_off_max_ms: t.flash_params?.off_max_ms,
     repeats: t.flash_params?.repeats,
     prediction_source: pred.source ?? '', prediction_best_option_id: pred.best_option_id ?? '', prediction_confidence: pred.confidence ?? '',
+    model_probabilities: pred.probabilities ?? '', model_shown_before_click: !!t.model_display,
     started_wall_ms: t.started_wall_ms ?? '', ended_wall_ms: t.ended_wall_ms ?? '', notes: t.notes || '',
   };
 }
+
+/** Per (trial, option) rows pairing the model's probability with the true answer and the participant's click. */
+export function feedbackRows(trials) {
+  const rows = [];
+  for (const t of trials) {
+    const p = t.prediction;
+    if (!p || !p.probabilities) continue;
+    const top = Object.entries(p.probabilities).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+    for (const o of t.options) {
+      rows.push({
+        session_id: t.session_id, trial_id: t.trial_id, trial_index: t.trial_index, valid: t.valid, invalid_reason: t.invalid_reason || '',
+        presentation_mode: t.type, option_id: o.id, option_position: o.position, category: o.category,
+        model_probability: p.probabilities[o.id] ?? '', model_score: p.p300 ? (p.p300[o.id] ?? '') : '', model_source: p.source,
+        model_probability_calibrated: !!p.probabilities_calibrated,
+        is_true_answer: o.id === t.true_answer_id, is_clicked: o.id === t.clicked_answer_id, is_model_top_choice: o.id === top,
+        true_answer_id: t.true_answer_id, clicked_answer_id: t.clicked_answer_id ?? '', model_top_option_id: top,
+        human_agrees_with_model: t.clicked_answer_id == null ? '' : t.clicked_answer_id === top,
+        model_shown_before_click: !!t.model_display,
+      });
+    }
+  }
+  return rows;
+}
+export const feedbackCsv = (trials) => toCSV(feedbackRows(trials), FEEDBACK_COLUMNS);
 
 export const trialsCsv = (trials) => toCSV(trials.map(trialRow), TRIAL_COLUMNS);
 export const markersCsv = (markers) => toCSV(markers, MARKER_COLUMNS);
@@ -41,6 +66,7 @@ export async function sessionFiles(sessionId, prefix = '') {
     { name: `${prefix}session.json`, data: JSON.stringify(bundle, null, 2) },
     { name: `${prefix}trials.csv`, data: trialsCsv(trials) },
     { name: `${prefix}markers.csv`, data: markersCsv(markers) },
+    { name: `${prefix}model_feedback.csv`, data: feedbackCsv(trials) },
   ];
 }
 

@@ -9,6 +9,9 @@ import urllib.request
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pw_helpers import set_num  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 8900 + os.getpid() % 90
 BASE = f"http://127.0.0.1:{PORT}"
@@ -43,8 +46,9 @@ def main():
             page.goto(BASE + "/")
             page.wait_for_selector("text=12 items in 3 categories")
             page.fill("input[placeholder='e.g. P01']", "INT")
-            for idx, val in enumerate(["2", "4", "6", "300", "100", "150", "300"]):  # n, options, repeats, on, off min/max, prompt
-                page.locator(".card input[type=number]").nth(idx).fill(val)
+            for label, val in {"Questions": "2", "Options per question": "4", "Repeats per option": "6", "Flash on (ms)": "300",
+                               "Gap min (ms)": "100", "Gap max (ms)": "150", "Prompt shown first (ms)": "300"}.items():
+                set_num(page, label, val)
             page.click("text=Start session")
             phase(page, "ready")
             sid = page.evaluate("window.cortext.runner.session.session_id")

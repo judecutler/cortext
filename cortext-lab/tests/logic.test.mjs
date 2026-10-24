@@ -187,3 +187,106 @@ test('ZIP writer: correct CRC and a structure Python can read back', () => {
     console.log('zip written to', globalThis.__zipPath);
   });
 });
+
+// ================= new in this change: upload, sequential mode, model probabilities, feedback export =================
+import { softmax } from '../web/js/predictor.js';
+import { estimateDurations, flashParamsFor, DEFAULT_SETTINGS } from '../web/js/settings.js';
+import { feedbackRows, feedbackCsv } from '../web/js/exporter.js';
+import { FEEDBACK_COLUMNS } from '../web/js/schema.js';
+import { buildSetFromFiles, materializeSet, stimuliSnapshot } from '../web/js/stimulusSets.js';
+
+const svg = (name, rel = '') => { const f = new File(['<svg xmlns="http://www.w3.org/2000/svg"/>'], name, { type: 'image/svg+xml' }); if (rel) f._relPath = rel; return f; };
+
+test('softmax: sums to 1, orders like the scores, stable for large values', () => {
+  const p = softmax({ a: 2, b: 1, c: -1, d: 0 }, 1);
+  assert.ok(Math.abs(Object.values(p).reduce((a, b) => a + b, 0) - 1) < 1e-12);
+  assert.ok(p.a > p.b && p.b > p.d && p.d > p.c);
+  assert.ok(Math.abs(softmax({ x: 1000, y: 999 }, 1).x - 1 / (1 + Math.exp(-1))) < 1e-9);
+  assert.deepEqual(softmax({}), {});
+});
+
+test('sequential mode: timing parameters and duration estimate use the sequential settings', () => {
+  const s = { ...DEFAULT_SETTINGS, trial_type: 'mcq_sequential', options_per_trial: 4, seq_repeats: 2, seq_on_ms: 1000, seq_gap_ms: 300, prompt_ms: 2000, n_trials: 10 };
+  assert.deepEqual(flashParamsFor('mcq_sequential', s), { on_ms: 1000, off_min_ms: 300, off_max_ms: 300, repeats: 2 });
+  assert.deepEqual(flashParamsFor('mcq_flash', s), { on_ms: 500, off_min_ms: 100, off_max_ms: 200, repeats: 10 });
+  const d = estimateDurations(s);
+  assert.equal(d.flashes, 8); assert.ok(Math.abs(d.flashSec - 8 * 1.3) < 1e-9);
+  // the original mode is unchanged: 40 flashes x (500 + 150) ms
+  assert.ok(Math.abs(estimateDurations({ ...DEFAULT_SETTINGS }).flashSec - 26) < 1e-9);
+});
+
+test('sequential plan: one-at-a-time with fixed gap, every option shown `repeats` times, no immediate repeats', () => {
+  const plan = makeFlashPlan({ optionIds: ['a', 'b', 'c', 'd'], repeats: 3, onMs: 1000, offMinMs: 300, offMaxMs: 300, rng: mulberry32(2) });
+  assert.equal(plan.events.length, 12);
+  plan.events.forEach((e, i) => { assert.equal(e.off_at - e.on_at, 1000); if (i) assert.equal(e.on_at - plan.events[i - 1].off_at, 300); });
+  for (let i = 1; i < 12; i++) assert.notEqual(plan.events[i].option_id, plan.events[i - 1].option_id);
+});
+
+test('upload: config + images are matched by file name; missing files produce warnings, unused files too', async () => {
+  const conf = { items: [
+    { id: 'dog', category: 'animal', label: 'dog', text: 'Dog', image: 'stimuli/dog.svg' },
+    { id: 'cat', category: 'animal', label: 'cat', text: 'Cat', image: 'imgs/CAT.SVG' },
+    { id: 'cup', category: 'object', label: 'cup', text: 'Cup', image: 'cup.png' },     // not uploaded
+    { id: 'sun', category: 'object', label: 'sun', text: 'Sun' },                        // matched by id
+  ] };
+  const built = await buildSetFromFiles([new File([JSON.stringify(conf)], 'my.json'), svg('dog.svg'), svg('cat.svg'), svg('sun.svg'), svg('extra.svg'), new File(['x'], 'notes.txt')]);
+  assert.equal(built.config.items.find((i) => i.id === 'dog').image, 'dog.svg');
+  assert.equal(built.config.items.find((i) => i.id === 'cat').image, 'cat.svg');           // case-insensitive
+  assert.equal(built.config.items.find((i) => i.id === 'sun').image, 'sun.svg');           // auto-attached by id
+  assert.equal(built.config.items.find((i) => i.id === 'cup').image, null);
+  assert.deepEqual(Object.keys(built.files).sort(), ['cat.svg', 'dog.svg', 'sun.svg']);
+  const w = built.warnings.join(' | ');
+  assert.match(w, /cup.*cup\.png.*not uploaded/); assert.match(w, /extra\.svg.*not used/); assert.match(w, /notes\.txt/);
+});
+
+test('upload: a folder of images becomes a stimulus set (file = item, sub-folder = category)', async () => {
+  const built = await buildSetFromFiles([
+    svg('dog.svg', 'pets/animals/dog.svg'), svg('Red_Cat.svg', 'pets/animals/Red_Cat.svg'),
+    svg('cup.svg', 'pets/objects/cup.svg'), svg('dog.svg', 'pets/objects/dog.svg')]);
+  const items = built.config.items;
+  assert.equal(items.length, 3, 'duplicate file name is ignored with a warning');
+  assert.match(built.warnings.join(' '), /Two files are named "dog.svg"/);
+  const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+  assert.equal(byId.dog.category, 'animals'); assert.equal(byId.red_cat.category, 'animals'); assert.equal(byId.cup.category, 'objects');
+  assert.equal(byId.red_cat.label, 'red cat'); assert.equal(byId.red_cat.text, 'Red Cat'); assert.equal(byId.red_cat.image, 'Red_Cat.svg');
+  // and it plugs straight into trial generation
+  const specs = buildTrialSpecs({ ...built.config, byId }, { n: 3, seed: 1, optionsPerTrial: 3 });
+  assert.equal(specs.length, 3); specs.forEach((s) => assert.equal(new Set(s.option_ids).size, 3));
+  // flat upload (no folders) is allowed but flagged
+  const flat = await buildSetFromFiles([svg('a.svg'), svg('b.svg')]);
+  assert.ok(flat.config.items.every((i) => i.category === 'uncategorized')); assert.match(flat.warnings.join(' '), /uncategorized/);
+  const empty = await buildSetFromFiles([new File(['x'], 'readme.txt')]);
+  assert.equal(empty.config.items.length, 0);
+});
+
+test('materialize: blob URLs for display, file names kept in the reproducible snapshot', async () => {
+  const built = await buildSetFromFiles([svg('a.svg', 'x/g/a.svg'), svg('b.svg', 'x/g/b.svg')]);
+  const cfg = materializeSet({ name: 'n', config: built.config, files: built.files });
+  assert.ok(cfg.items.every((i) => i.image.startsWith('blob:')));
+  const snap = stimuliSnapshot(cfg);
+  assert.deepEqual(snap.items.map((i) => i.image), ['a.svg', 'b.svg']);
+  assert.deepEqual(snap.source, { type: 'upload', name: 'n' });
+  assert.ok(!JSON.stringify(snap).includes('blob:'));
+});
+
+test('model feedback rows: one per option, probabilities next to truth/click, anchoring flag', () => {
+  const spec = buildTrialSpecs(cfg, { n: 1, seed: 3 })[0];
+  const settings = { ...DEFAULT_SETTINGS };
+  const t = makeTrialRecord({ sessionId: 'S', spec: { ...spec, type: 'mcq_sequential' }, trialId: 5, attempt: 0, rng: mulberry32(1), settings, byId: cfg.byId });
+  const others = t.options.filter((o) => !o.is_target);
+  t.prediction = { source: 'ws', probabilities: { [t.true_answer_id]: 0.2, [others[0].id]: 0.6, [others[1].id]: 0.1, [others[2].id]: 0.1 }, p300: { [t.true_answer_id]: 0.1 }, probabilities_calibrated: true };
+  t.model_display = { probabilities: t.prediction.probabilities };
+  recordClick(t, t.true_answer_id, 900);
+  const rows = feedbackRows([t]);
+  assert.equal(rows.length, 4);
+  assert.ok(Math.abs(rows.reduce((a, r) => a + r.model_probability, 0) - 1) < 1e-9);
+  assert.equal(rows.filter((r) => r.is_true_answer).length, 1); assert.equal(rows.filter((r) => r.is_clicked).length, 1);
+  assert.equal(rows.filter((r) => r.is_model_top_choice).length, 1);
+  assert.equal(rows.find((r) => r.is_model_top_choice).option_id, others[0].id);
+  assert.ok(rows.every((r) => r.human_agrees_with_model === false && r.model_shown_before_click === true && r.presentation_mode === 'mcq_sequential'));
+  assert.equal(t.flash_params.on_ms, 1000, 'sequential trial records carry the sequential timing');
+  const csv = feedbackCsv([t]).split('\n');
+  assert.equal(csv[0].split(',').length, FEEDBACK_COLUMNS.length); assert.equal(csv.length, 6);
+  assert.deepEqual(feedbackRows([{ ...t, prediction: null }]), [], 'no model output, no feedback rows');
+  const row = trialRow(t); assert.equal(row.model_shown_before_click, true);
+});

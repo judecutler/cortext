@@ -2,7 +2,7 @@
 // data is only ever marked invalid, never removed.
 
 const DB_NAME = 'cortext-lab';
-const VERSION = 1;
+const VERSION = 2; // v2 adds 'stimulus_sets' (uploaded stimulus files); v1 data is kept as is
 let dbp = null;
 
 export function openDb() {
@@ -12,11 +12,16 @@ export function openDb() {
     const req = indexedDB.open(DB_NAME, VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      db.createObjectStore('sessions', { keyPath: 'session_id' });
-      const t = db.createObjectStore('trials', { keyPath: 'key' });
-      t.createIndex('session_id', 'session_id');
-      const m = db.createObjectStore('markers', { keyPath: 'key' });
-      m.createIndex('session_id', 'session_id');
+      if (!db.objectStoreNames.contains('sessions')) db.createObjectStore('sessions', { keyPath: 'session_id' });
+      if (!db.objectStoreNames.contains('trials')) {
+        const t = db.createObjectStore('trials', { keyPath: 'key' });
+        t.createIndex('session_id', 'session_id');
+      }
+      if (!db.objectStoreNames.contains('markers')) {
+        const m = db.createObjectStore('markers', { keyPath: 'key' });
+        m.createIndex('session_id', 'session_id');
+      }
+      if (!db.objectStoreNames.contains('stimulus_sets')) db.createObjectStore('stimulus_sets', { keyPath: 'name' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);

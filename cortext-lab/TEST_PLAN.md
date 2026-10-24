@@ -8,6 +8,7 @@ python tests/test_bridge.py           # bridge: static files, WebSocket handshak
 python tests/test_bridge_lsl.py       # needs pylsl: marker arrives on a real LSL inlet with a corrected timestamp
 python tests/e2e.py                   # needs playwright + chromium: full session in headless Chrome (screenshots in tests/screenshots/)
 python tests/e2e_interrupts.py        # pause mid-flash, hidden tab, bridge killed + restarted mid-session, reload keeps data
+python tests/e2e_sequential.py        # upload (folder, config+images, warnings, persistence) + one-at-a-time mode + model_feedback.csv
 ```
 
 What they establish: each option flashes exactly `repeats` times and never twice in a row; flash onsets stay within
@@ -34,6 +35,11 @@ with no sequence gaps; discard/redo/early-click/export/review behave and never d
 11. With LabRecorder: confirm `CorTextMarkers` appears, record 1 trial, and check the XDF contains the markers
     (`LSL recorder attached` turns green while recording).
 12. Run `TIMING_CHECKLIST.md`.
+13. Sequential mode: Setup → Presentation mode → "One at a time, then choose". Start; the question stays put, each option
+    appears alone (1 s), then the grid appears with percentages; click; check the summary page shows the "anchored" warning
+    and `model_feedback.csv` has one row per option.
+14. Upload: drop a folder of your own images (sub-folder per category) and a .json + images; check the item count and
+    warnings, reload the page, and confirm the set is still in the "Use" menu.
 
 ## C. Not covered (needs real hardware/people)
 

@@ -157,6 +157,7 @@ export class SessionRunner {
     const outcome = await this._post.promise;
     clearTimeout(this._autoTimer);
     this.ui.hidePost();
+    if (this.settings.send_feedback) this.predictor.sendFeedback(trial);   // opt-in; only after the trial is over
     if (outcome === 'redo') {
       applyValidity(trial, { valid: false, reason: 'redo', by: 'operator' });
       this.markers.emit('trial_invalid', { ...this._tf(trial), extra: { reason: 'redo' } });
@@ -288,7 +289,7 @@ export class SessionRunner {
   }
 }
 
-export function newSessionRecord({ participant_id, device, notes, settings, stimuli, plannedTrials }) {
+export function newSessionRecord({ participant_id, device, notes, settings, stimuli, plannedTrials, snapshot = null }) {
   const seed = settings.seed ?? (Math.random() * 2 ** 31) >>> 0;
   const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
   const safe = (participant_id || 'anon').replace(/[^A-Za-z0-9_-]/g, '_');
@@ -297,6 +298,7 @@ export function newSessionRecord({ participant_id, device, notes, settings, stim
     session_id: `${safe}_${stamp}_${Math.random().toString(36).slice(2, 5)}`,
     participant_id, device, notes: notes || '', seed, settings: { ...settings, seed },
     stimuli_url: settings.stimuli_url, stimuli_item_count: stimuli.items.length,
+    stimuli_source: (stimuli.source || { type: 'path', url: settings.stimuli_url }), stimuli_snapshot: snapshot,
     planned_trials: plannedTrials, next_trial_id: 0, status: 'created', created_iso: new Date().toISOString(),
     user_agent: navigator.userAgent, screen: { w: screen.width, h: screen.height, dpr: window.devicePixelRatio },
     time_origin_wall_ms: performance.timeOrigin,
