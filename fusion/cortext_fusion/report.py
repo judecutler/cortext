@@ -82,7 +82,7 @@ def render_report(res) -> str:
         lines.append("- Learned weights per held-out fold: " + "; ".join(
             f"{f['held_out']}: " + ", ".join(f"{k}={v:.2f}" for k, v in f["weights"].items())
             for f in m["calibration_folds"][:6]) + (" ..." if len(m["calibration_folds"]) > 6 else ""))
-    lines += ["", "Confusion matrix (rows = true option position):", "", res.confusion.to_markdown()
+    lines += ["", "Confusion matrix by on-screen position (rows = true position). A skew toward one position suggests a gaze/position confound:", "", res.confusion.to_markdown()
               if _has_tabulate() else "```\n" + res.confusion.to_string() + "\n```", ""]
     if res.figures:
         lines += ["Figures: " + ", ".join(f"![{k}]({v})" for k, v in res.figures.items()), ""]

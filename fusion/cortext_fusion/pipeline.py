@@ -11,7 +11,6 @@ from .config import Config, ModelConfig
 from .fusion import CONSTANT_TOL, Fuser
 from .io import load_any
 from .schema import FusedPrediction, TrialMeta, TrialScores
-from .stimulus_log import load_stimulus_log
 
 
 @dataclass
@@ -116,9 +115,48 @@ def adapt_model(name: str, adapter: Adapter, raw: Mapping[str, Any], metas: Mapp
     return scores
 
 
+def match_trial_ids(raw: Mapping[str, Any], metas: Mapping[str, TrialMeta]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Map model-output trial ids onto stimulus-log keys.
+
+    Accepted forms for a trial keyed ``"S:T"``: ``S:T``, ``S__T``, ``S/T``, and the
+    bare ``T`` when that trial id occurs in only one loaded session. Numeric
+    forms are normalised ('3.0' == '3'). Returns (remapped outputs, {output id: key}
+    for ids that were translated).
+    """
+    from .stimulus_log import KEY_SEP, norm_id
+    alias: dict[str, str | None] = {}
+
+    def add(a: str, key: str) -> None:
+        alias[a] = key if alias.get(a, key) == key else None  # None = ambiguous
+
+    for key, m in metas.items():
+        add(key, key)
+        add(norm_id(key), key)
+        if KEY_SEP in key:
+            s, t = key.split(KEY_SEP, 1)
+            for sep in ("__", "/"):
+                add(f"{s}{sep}{t}", key)
+        if m.local_trial_id is not None:
+            add(norm_id(m.local_trial_id), key)
+    out: dict[str, Any] = {}
+    translated: dict[str, str] = {}
+    for rid, v in raw.items():
+        key = rid if rid in metas else alias.get(norm_id(rid))
+        if key is None:
+            out[rid] = v  # unknown; reported by check_alignment
+            continue
+        if key in out:
+            raise ValueError(f"model output has two entries for trial {key} ({rid!r} and an earlier one)")
+        out[key] = v
+        if key != rid:
+            translated[rid] = key
+    return out, translated
+
+
 def check_alignment(name: str, raw: Mapping[str, Any], metas: Mapping[str, TrialMeta], issues: list[Issue]) -> None:
     extra = sorted(set(raw) - set(metas))
-    missing = sorted(t for t, m in metas.items() if t not in raw)
+    # trials that were never run (no flashes) are not expected to have model output
+    missing = sorted(t for t, m in metas.items() if t not in raw and m.flashes)
     if extra:
         issues.append(Issue("warning", "unknown_trial_ids", name, f"{len(extra)} trial id(s) in the model output are "
                             "not in the stimulus log (ignored). Check the trial id format (e.g. 's1_t003' vs '3').", extra))
@@ -136,9 +174,7 @@ def load_dataset(cfg: Config, sources: Mapping[str, Any] | None = None,
     """
     issues: list[Issue] = []
     if metas is None:
-        if cfg.markers is None:
-            raise ValueError("config needs stimulus_log.markers (the web app's marker log)")
-        metas = load_stimulus_log(cfg.resolve(cfg.markers), cfg.resolve(cfg.trials) if cfg.trials else None)
+        metas = cfg.load_metas()
     metas = dict(metas)
     models: dict[str, ModelData] = {}
     for mc in cfg.enabled_models:
@@ -151,6 +187,11 @@ def load_dataset(cfg: Config, sources: Mapping[str, Any] | None = None,
         if trial_ids is None and mc.trial_order == "stimulus_log":
             trial_ids = list(metas)
         raw = load_any(src, trial_ids=trial_ids, pattern=mc.file_pattern)
+        raw, translated = match_trial_ids(raw, metas)
+        if translated:
+            ex = next(iter(translated.items()))
+            issues.append(Issue("info", "trial_ids_translated", mc.name, f"{len(translated)} output trial id(s) were "
+                                f"matched to stimulus-log keys (e.g. {ex[0]!r} -> {ex[1]!r})"))
         check_alignment(mc.name, raw, metas, issues)
         adapter = mc.build_adapter()
         scores = adapt_model(mc.name, adapter, raw, metas, issues)

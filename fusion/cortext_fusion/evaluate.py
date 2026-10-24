@@ -329,18 +329,18 @@ def evaluate(ds: Dataset, cfg: Config, train_on: str = "clicked", out_dir: str |
     conf = probs[main].max(axis=1)
     correct = (preds[main] == y).astype(float)
     ece, rel = expected_calibration_error(conf[m], correct[m], ev.calibration_bins)
-    opts = inp.metas[0].option_ids
+    pos = [chr(ord("A") + i) for i in range(inp.n_options)]  # option order = screen position
     cm = np.zeros((inp.n_options, inp.n_options + 1), dtype=int)
     for p, t in zip(preds[main][m], y[m]):
         cm[t, p if p >= 0 else inp.n_options] += 1
-    confusion = pd.DataFrame(cm, index=[f"true {o}" for o in opts], columns=[f"pred {o}" for o in opts] + ["no pred"])
+    confusion = pd.DataFrame(cm, index=[f"true {o}" for o in pos], columns=[f"pred {o}" for o in pos] + ["no pred"])
 
     pred_df = pd.DataFrame({
         "trial_id": [mm.trial_id for mm in inp.metas],
         "group": inp.groups,
         "target_option": [mm.target_option for mm in inp.metas],
         "clicked_option": [mm.clicked_option for mm in inp.metas],
-        **{f"pred[{k}]": [opts[i] if i >= 0 else None for i in v] for k, v in preds.items()},
+        **{f"pred[{k}]": [mm.option_ids[i] if i >= 0 else None for mm, i in zip(inp.metas, v)] for k, v in preds.items()},
         f"confidence[{main}]": conf,
     })
 

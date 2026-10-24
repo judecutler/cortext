@@ -208,12 +208,16 @@ def _plain(o: Any) -> Any:
     return o
 
 
-def fit_conditional_logit(X: np.ndarray, y: np.ndarray, l2: float = 1e-2) -> tuple[np.ndarray, float]:
+def fit_conditional_logit(X: np.ndarray, y: np.ndarray, l2: float = 1e-2,
+                          nonnegative: bool = True) -> tuple[np.ndarray, float]:
     """Fit beta for P(option j | trial) = softmax_j(X[t, j, :] @ beta).
 
     X: [trials, options, features]; y: index of the correct option per trial.
     This is logistic regression where the choice set is the trial's options
     (McFadden's conditional logit); it learns weights and temperature jointly.
+    Weights are constrained to be >= 0 by default: every adapter promises
+    "higher = more likely", so a negative weight would only hide a sign error
+    (which the evaluation flags) or exploit a chance anti-correlation.
     Returns (beta, mean negative log-likelihood per trial).
     """
     X = np.asarray(X, dtype=float)
@@ -229,7 +233,8 @@ def fit_conditional_logit(X: np.ndarray, y: np.ndarray, l2: float = 1e-2) -> tup
         grad = np.einsum("tj,tjk->k", p, X) - X[idx, y].sum(0) + 2 * l2 * beta
         return nll, grad
 
-    res = minimize(f, np.zeros(K), jac=True, method="L-BFGS-B")
+    bounds = [(0.0, None)] * K if nonnegative else None
+    res = minimize(f, np.full(K, 0.1 if nonnegative else 0.0), jac=True, method="L-BFGS-B", bounds=bounds)
     beta = res.x
     u = X @ beta
     nll = float(np.mean(logsumexp(u, axis=1) - u[idx, y]))
@@ -329,6 +334,13 @@ def calibrate(
             cur_cv = cv
             selected.append(name)
     beta, nll = fit_conditional_logit(X[:, :, cur_cols], y, l2)
+    # If the data say "no information" (all weights 0), keep a tiny weight on the baseline so the
+    # prediction is still its best guess, with ~uniform confidence (i.e. "unsure"), not "no answer".
+    floor = 1e-3
+    for i, c in enumerate(cur_cols):
+        if c in base_cols and beta[i] < floor:
+            beta[i] = floor
+            selection.setdefault("floored", []).append(models[c])
     weights = {name: 0.0 for name in models}
     for c, b in zip(cur_cols, beta):
         weights[models[c]] = float(b)

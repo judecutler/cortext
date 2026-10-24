@@ -1,5 +1,8 @@
 # One ready-to-paste `models:` entry per output shape. Pick the one that matches
 # your model, or run `cortext-fusion describe <your file> --markers <marker log>`.
+# Trial ids: "<session_id>:<trial_id>", or session_id + trial_id columns/fields (CSV, JSON records),
+# or "<session_id>__<trial_id>" file names; the bare trial id works when one session is loaded.
+# Option ids are the app's item ids (e.g. dog_01); lists without ids must be in screen-position order.
 # Every entry also accepts:
 #   lower_is_better: true   # distances / losses (higher = LESS likely)
 #   field: scores           # take this key from each trial's record first
@@ -8,8 +11,8 @@
 
 models:
   # (a) one score per option ------------------------------------------------
-  # JSON {trial_id: [sA, sB, sC, sD]}  or  {trial_id: {A: sA, B: sB, ...}}
-  # or CSV long: trial_id, option_id, score   or  wide: trial_id, A, B, C, D
+  # JSON {trial_key: [s_pos0, s_pos1, s_pos2, s_pos3]}  or  {trial_key: {dog_01: s, cat_02: s, ...}}
+  # or CSV long: session_id, trial_id, option_id, score
   - name: p300_per_option
     source: outputs/p300_per_option.json
     adapter: per_option
@@ -18,21 +21,21 @@ models:
       # key_prefix: "score_"  # wide CSV columns score_A, score_B, ...
 
   # P300 starter notebook (`find_p300_peak`): peak amplitude of each option's averaged ERP
-  # Save e.g. {trial_id: {A: amp_A, B: amp_B, ...}} -> per_option. Larger P300 = attended.
+  # Save e.g. {"<session>:<trial>": {dog_01: amp, cat_02: amp, ...}} -> per_option. Larger P300 = attended.
   - name: p300_peak
     source: outputs/p300_peak_amplitude.json
     adapter: per_option
 
   # (b) one score per flash -------------------------------------------------
-  # CSV long: trial_id, option_id, [repeat_index], score   (one row per flash)
-  # .npy [trials, repeats, options]  (grid; columns in the stimulus log's option order)
+  # CSV long: session_id, trial_id, option_id, [repeat_index], score   (one row per flash)
+  # .npy [trials, repeats, options]  (grid; columns in screen-position order)
   # .npy [trials, flashes]           (aligned with the marker log's flash order)
   - name: p300_per_flash
     source: outputs/p300_per_flash.csv
     adapter: per_flash
     options:
       aggregate: mean          # mean | sum | median
-      # grid_order: [A, B, C, D]  # if grid columns are not in the stimulus log order
+      # grid_order: [...]      # only if grid columns are not in screen-position order
 
   # (c) one probability per option ------------------------------------------
   # JSON records {trial_id, option_ids: [...], probs: [...]}; zeros/ones are clipped
@@ -44,7 +47,7 @@ models:
       eps: 0.0001
 
   # (d) P(target) per flash epoch -------------------------------------------
-  # CSV long: trial_id, option_id, repeat_index, p_target
+  # CSV long: session_id, trial_id, option_id, repeat_index, p_target
   # .npy [trials, flashes, 2] = sklearn predict_proba (non-target, target)
   - name: p300_epoch_prob
     source: outputs/p300_epoch_prob.csv
@@ -53,7 +56,7 @@ models:
       target_column: 1         # which column of predict_proba is "target"
 
   # (e) probabilities over many categories ----------------------------------
-  # wide CSV: trial_id, p_dog, p_cat, ...  or .npy [trials, classes] + class names
+  # wide CSV: session_id, trial_id, p_dog, p_cat, ...  or .npy [trials, classes] + class names
   - name: category_probs
     source: outputs/category_probs.npy
     adapter: class_probabilities

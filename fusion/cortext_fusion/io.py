@@ -25,7 +25,8 @@ from typing import Any, Callable, Iterator
 import numpy as np
 import pandas as pd
 
-TRIAL_ID_KEYS = ("trial_id", "trial", "trialid", "trial_idx")
+TRIAL_ID_KEYS = ("trial_key", "trial_id", "trial", "trialid", "trial_idx")
+SESSION_KEYS = ("session_id", "session", "sessionid")
 PER_TRIAL_SUFFIXES = {".json", ".npy", ".csv", ".jsonl"}
 
 
@@ -37,8 +38,24 @@ def _find_tid_key(keys) -> str | None:
     return None
 
 
-def _record_to_raw(rec: dict[str, Any], tid_key: str) -> Any:
-    rest = {k: v for k, v in rec.items() if k != tid_key}
+def _find_session_key(keys) -> str | None:
+    lower = {str(k).lower(): k for k in keys}
+    for k in SESSION_KEYS:
+        if k in lower:
+            return lower[k]
+    return None
+
+
+def _key(rec: dict[str, Any], tid_key: str, sess_key: str | None) -> str:
+    from .stimulus_log import make_key, norm_id
+    if sess_key is not None and rec.get(sess_key) not in (None, "") and not (
+            isinstance(rec.get(sess_key), float) and np.isnan(rec[sess_key])):
+        return make_key(rec[sess_key], rec[tid_key])
+    return norm_id(rec[tid_key])
+
+
+def _record_to_raw(rec: dict[str, Any], tid_key: str, sess_key: str | None = None) -> Any:
+    rest = {k: v for k, v in rec.items() if k not in (tid_key, sess_key)}
     if len(rest) == 1:
         return next(iter(rest.values()))
     return rest
@@ -50,15 +67,16 @@ def records_to_trials(records: list[dict[str, Any]], tid_key: str | None = None)
     tid_key = tid_key or _find_tid_key(records[0].keys())
     if tid_key is None:
         raise ValueError(f"records have no trial id field (looked for {TRIAL_ID_KEYS}); keys: {list(records[0])}")
+    sess_key = _find_session_key(records[0].keys()) if tid_key.lower() != "trial_key" else None
     out: dict[str, Any] = {}
     multi: dict[str, list[dict[str, Any]]] = {}
     for rec in records:
-        multi.setdefault(str(rec[tid_key]), []).append(rec)
+        multi.setdefault(_key(rec, tid_key, sess_key), []).append(rec)
     for tid, recs in multi.items():
         if len(recs) == 1:
-            out[tid] = _record_to_raw(recs[0], tid_key)
+            out[tid] = _record_to_raw(recs[0], tid_key, sess_key)
         else:  # several records for one trial -> columns of lists (long format)
-            cols = [k for k in recs[0] if k != tid_key]
+            cols = [k for k in recs[0] if k not in (tid_key, sess_key)]
             out[tid] = {c: [r.get(c) for r in recs] for c in cols}
     return out
 
@@ -67,11 +85,14 @@ def frame_to_trials(df: pd.DataFrame, tid_key: str | None = None) -> dict[str, A
     tid_key = tid_key or _find_tid_key(df.columns)
     if tid_key is None:
         raise ValueError(f"table has no trial id column (looked for {TRIAL_ID_KEYS}); columns: {list(df.columns)}")
+    sess_key = _find_session_key(df.columns) if str(tid_key).lower() != "trial_key" else None
     df = df.copy()
-    df[tid_key] = df[tid_key].astype(str)
+    keys = [_key(r, tid_key, sess_key) for r in df[[c for c in (tid_key, sess_key) if c]].to_dict("records")]
+    df = df.drop(columns=[c for c in (tid_key, sess_key) if c])
+    df["__key"] = keys
     out: dict[str, Any] = {}
-    for tid, g in df.groupby(tid_key, sort=False):
-        g = g.drop(columns=[tid_key])
+    for tid, g in df.groupby("__key", sort=False):
+        g = g.drop(columns=["__key"])
         if len(g) == 1:
             out[tid] = {c: _py(g[c].iloc[0]) for c in g.columns}
         else:
@@ -168,7 +189,7 @@ def load_single_trial_file(path: str | Path) -> Any:
         if isinstance(data, dict):
             k = _find_tid_key(data.keys())
             if k is not None:
-                return _record_to_raw(data, k)
+                return _record_to_raw(data, k, _find_session_key(data.keys()))
         return data
     if suf == ".npy":
         return np.load(p, allow_pickle=False)
@@ -176,7 +197,7 @@ def load_single_trial_file(path: str | Path) -> Any:
         df = pd.read_csv(p)
         k = _find_tid_key(df.columns)
         if k is not None:
-            df = df.drop(columns=[k])
+            df = df.drop(columns=[c for c in (k, _find_session_key(df.columns)) if c])
         if len(df) == 1:
             return {c: _py(df[c].iloc[0]) for c in df.columns}
         return {c: [_py(v) for v in df[c].tolist()] for c in df.columns}

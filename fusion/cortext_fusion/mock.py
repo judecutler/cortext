@@ -24,7 +24,6 @@ from .schema import Flash, TrialMeta
 
 DEFAULT_CATEGORIES = ["dog", "cat", "bird", "fish", "car", "boat", "house", "tree",
                       "flower", "apple", "chair", "hammer"]
-INVALID_REASONS = ["misclick", "blink or movement", "distracted", "equipment glitch"]
 
 FORMATS = {
     # name: (model role, adapter, description)
@@ -60,48 +59,103 @@ class MockSpec:
     seed: int = 0
 
 
-def generate_log(spec: MockSpec, rng: np.random.Generator) -> tuple[pd.DataFrame, pd.DataFrame, list[TrialMeta], dict[str, int]]:
-    option_ids = [chr(ord("A") + i) for i in range(spec.n_options)]
-    markers, trials, metas, attended = [], [], [], {}
-    t0 = 1000.0
+MARKER_COLUMNS = ["seq", "session_id", "event", "t_ms", "frame_ms", "wall_ms", "trial_id", "trial_index", "option_id",
+                  "option_position", "category", "is_target", "repeat_index", "flash_index", "true_answer_id",
+                  "bridge_sent", "extra"]
+TRIAL_COLUMNS = ["session_id", "trial_id", "trial_index", "attempt", "type", "status", "valid", "invalid_reason",
+                 "invalid_note", "prompt", "tile_content", "option_ids_by_position", "true_answer_id",
+                 "true_answer_category", "clicked_answer_id", "clicked_category", "correct", "rt_ms", "early_clicks",
+                 "n_flashes", "flash_order", "flash_on_ms", "flash_off_min_ms", "flash_off_max_ms", "repeats",
+                 "prediction_source", "prediction_best_option_id", "prediction_confidence", "started_wall_ms",
+                 "ended_wall_ms", "notes"]
+LAB_INVALID_REASONS = ["misclick", "blink_or_movement", "distracted", "equipment_glitch"]
+
+
+def generate_log(spec: MockSpec, rng: np.random.Generator, out: Path | None = None
+                 ) -> tuple[list[TrialMeta], dict[str, int]]:
+    """Simulate CorText Lab sessions; write them as Lab exports under ``out/lab_export/<session_id>/``.
+
+    The files use the app's exact column order (cortext-lab/web/js/schema.js), integer trial ids that
+    restart in every session, item ids as option ids, and non-flash marker events, so the fusion
+    layer is tested against the real export format.
+    """
+    from .stimulus_log import make_key
+    metas, attended = [], {}
+    wall0 = 1.7614e12
     for p in range(spec.n_participants):
         pid = f"P{p + 1:02d}"
         for s in range(spec.sessions_per_participant):
-            sid = f"{pid}_S{s + 1}"
+            sid = f"{pid}_20261024{p:02d}{s:02d}00_m{s}"
+            markers, trials, seq, t_ms = [], [], 0, 1000.0
+
+            def mk(event, **kw):
+                nonlocal seq
+                row = {c: "" for c in MARKER_COLUMNS}
+                row.update(seq=seq, session_id=sid, event=event, t_ms=round(t_ms, 3), frame_ms=round(t_ms, 3),
+                           wall_ms=round(wall0 + t_ms, 1), bridge_sent="true", **kw)
+                seq += 1
+                markers.append(row)
+
+            mk("session_start", extra=json.dumps({"participant_id": pid}))
             for k in range(spec.trials_per_session):
-                tid = f"{sid}_T{k + 1:03d}"
                 cats = list(rng.choice(spec.categories, size=spec.n_options, replace=False))
+                items = [f"{c}_{int(rng.integers(1, 4)):02d}" for c in cats]  # item ids, in screen-position order
                 tgt = int(rng.integers(spec.n_options))
                 att = tgt
                 if rng.random() < spec.click_error_rate:
                     att = int(rng.choice([j for j in range(spec.n_options) if j != tgt]))
                 invalid = rng.random() < spec.invalid_rate
-                attended[tid] = att
-                flashes, last = [], None
+                key = make_key(sid, k)
+                attended[key] = att
+                base = dict(trial_id=k, trial_index=k, true_answer_id=items[tgt])
+                mk("trial_start", **base)
+                flashes, last, fi = [], None, 0
                 for r in range(spec.n_repeats):
                     order = list(rng.permutation(spec.n_options))
                     if last is not None and order[0] == last:  # no immediate repeats
                         order[0], order[1] = order[1], order[0]
                     for j in order:
-                        markers.append({
-                            "timestamp": round(t0, 4), "trial_id": tid, "option_id": option_ids[j],
-                            "true_category": cats[j], "is_target": int(j == tgt), "repeat_index": r,
-                            "session_id": sid, "participant_id": pid,
-                        })
-                        flashes.append(Flash(option_ids[j], r, round(t0, 4)))
-                        t0 += (spec.flash_on_ms + spec.flash_off_ms) / 1000
+                        fl = dict(base, option_id=items[j], option_position=j, category=cats[j],
+                                  is_target="true" if j == tgt else "false", repeat_index=r, flash_index=fi)
+                        mk("flash_on", **fl)
+                        flashes.append(Flash(items[j], r, round(t_ms, 3)))
+                        t_ms += spec.flash_on_ms
+                        mk("flash_off", **fl)
+                        t_ms += spec.flash_off_ms
+                        fi += 1
                     last = order[-1]
-                t0 += 3.0
-                reason = str(rng.choice(INVALID_REASONS)) if invalid else None
-                trials.append({
-                    "trial_id": tid, "session_id": sid, "participant_id": pid,
-                    "prompt": f"Which one is the {cats[tgt]}?", "option_order": "|".join(option_ids),
-                    "target_category": cats[tgt], "target_option": option_ids[tgt],
-                    "clicked_option": option_ids[att], "valid": not invalid, "invalid_reason": reason,
-                })
-                metas.append(TrialMeta(tid, list(option_ids), cats, cats[tgt], option_ids[tgt], option_ids[att],
-                                       not invalid, reason, sid, pid, f"Which one is the {cats[tgt]}?", flashes))
-    return pd.DataFrame(markers), pd.DataFrame(trials), metas, attended
+                mk("response_open", **base)
+                t_ms += 900
+                mk("click", **base, option_id=items[att], option_position=att, category=cats[att])
+                t_ms += 1500
+                reason = str(rng.choice(LAB_INVALID_REASONS)) if invalid else ""
+                trials.append({**{c: "" for c in TRIAL_COLUMNS}, **dict(
+                    session_id=sid, trial_id=k, trial_index=k, attempt=1, type="mcq_flash", status="complete",
+                    valid="false" if invalid else "true", invalid_reason=reason,
+                    prompt=f"Which one is the {cats[tgt]}?", tile_content="image",
+                    option_ids_by_position="|".join(items), true_answer_id=items[tgt], true_answer_category=cats[tgt],
+                    clicked_answer_id=items[att], clicked_category=cats[att], correct=str(att == tgt).lower(),
+                    rt_ms=900, early_clicks=0, n_flashes=len(flashes), flash_order="|".join(f.option_id for f in flashes),
+                    flash_on_ms=spec.flash_on_ms, flash_off_min_ms=spec.flash_off_ms, flash_off_max_ms=spec.flash_off_ms,
+                    repeats=spec.n_repeats)})
+                metas.append(TrialMeta(key, items, cats, cats[tgt], items[tgt], items[att], not invalid,
+                                       reason or None, sid, pid, f"Which one is the {cats[tgt]}?", flashes,
+                                       local_trial_id=str(k)))
+            # one trial that was aborted before any flash (must load as invalid, never vanish)
+            trials.append({**{c: "" for c in TRIAL_COLUMNS}, **dict(
+                session_id=sid, trial_id=spec.trials_per_session, trial_index=spec.trials_per_session, attempt=1,
+                type="mcq_flash", status="aborted", valid="false", invalid_reason="aborted",
+                option_ids_by_position="|".join(f"{c}_01" for c in spec.categories[: spec.n_options]),
+                true_answer_id=f"{spec.categories[0]}_01", true_answer_category=spec.categories[0])})
+            if out is not None:
+                d = out / "lab_export" / sid
+                d.mkdir(parents=True, exist_ok=True)
+                pd.DataFrame(markers, columns=MARKER_COLUMNS).to_csv(d / "markers.csv", index=False)
+                pd.DataFrame(trials, columns=TRIAL_COLUMNS).to_csv(d / "trials.csv", index=False)
+                (d / "session.json").write_text(json.dumps({"schema_version": 1, "session": {
+                    "session_id": sid, "participant_id": pid, "device": "MOCK", "status": "complete"},
+                    "markers_count": len(markers)}, indent=1))
+    return metas, attended
 
 
 def _flash_scores(meta: TrialMeta, att: int, d: float, rng) -> np.ndarray:
@@ -114,9 +168,7 @@ def generate(out_dir: str | Path, spec: MockSpec | None = None, formats: list[st
     rng = np.random.default_rng(spec.seed)
     out = Path(out_dir)
     (out / "outputs").mkdir(parents=True, exist_ok=True)
-    mdf, tdf, metas, attended = generate_log(spec, rng)
-    mdf.to_csv(out / "markers.csv", index=False)
-    tdf.to_csv(out / "trials.csv", index=False)
+    metas, attended = generate_log(spec, rng, out)
     formats = formats or list(FORMATS)
     unknown = set(formats) - set(FORMATS)
     if unknown:
@@ -132,13 +184,16 @@ def generate(out_dir: str | Path, spec: MockSpec | None = None, formats: list[st
     written: dict[str, str] = {}
     ids_txt = "\n".join(ids) + "\n"
 
+    def st(m: TrialMeta) -> dict[str, str]:  # CSV outputs carry session_id + trial_id columns, like the app
+        return {"session_id": m.session_id, "trial_id": m.local_trial_id}
+
     def opt_mean(m: TrialMeta, vals: np.ndarray) -> np.ndarray:
         return np.array([vals[[f.option_id == o for f in m.flashes]].mean() for o in m.option_ids])
 
     for fmt in formats:
         path: Path
         if fmt == "p300_per_flash_csv":
-            rows = [{"trial_id": m.trial_id, "option_id": f.option_id, "repeat_index": f.repeat_index,
+            rows = [{**st(m), "option_id": f.option_id, "repeat_index": f.repeat_index,
                      "score": round(float(v), 5)} for m in metas for f, v in zip(m.flashes, flash_sc[m.trial_id])]
             path = out / "outputs" / "p300_per_flash.csv"
             pd.DataFrame(rows).to_csv(path, index=False)
@@ -147,7 +202,7 @@ def generate(out_dir: str | Path, spec: MockSpec | None = None, formats: list[st
             for m in metas:
                 lr = spec.p300_signal * flash_sc[m.trial_id] - spec.p300_signal ** 2 / 2 + np.log(1 / (m.n_options - 1))
                 pt = 1 / (1 + np.exp(-lr))
-                rows += [{"trial_id": m.trial_id, "option_id": f.option_id, "repeat_index": f.repeat_index,
+                rows += [{**st(m), "option_id": f.option_id, "repeat_index": f.repeat_index,
                           "p_target": round(float(p), 6)} for f, p in zip(m.flashes, pt)]
             path = out / "outputs" / "p300_epoch_prob.csv"
             pd.DataFrame(rows).to_csv(path, index=False)
@@ -190,7 +245,7 @@ def generate(out_dir: str | Path, spec: MockSpec | None = None, formats: list[st
             path = out / "outputs" / "p300_per_trial"
             path.mkdir(exist_ok=True)
             for m in metas:
-                (path / f"{m.trial_id}.json").write_text(json.dumps({
+                (path / f"{m.session_id}__{m.local_trial_id}.json").write_text(json.dumps({
                     "option_id": [f.option_id for f in m.flashes],
                     "score": [round(float(v), 5) for v in flash_sc[m.trial_id]]}))
         elif fmt in ("category_class_probs_csv", "category_class_probs_npy"):
@@ -204,7 +259,8 @@ def generate(out_dir: str | Path, spec: MockSpec | None = None, formats: list[st
             probs = np.array(probs)
             if fmt == "category_class_probs_csv":
                 df = pd.DataFrame(np.round(probs, 6), columns=[f"p_{c}" for c in cats])
-                df.insert(0, "trial_id", ids)
+                df.insert(0, "trial_id", [m.local_trial_id for m in metas])
+                df.insert(0, "session_id", [m.session_id for m in metas])
                 path = out / "outputs" / "category_class_probs.csv"
                 df.to_csv(path, index=False)
             else:
@@ -249,7 +305,7 @@ def write_mock_configs(out: Path, written: dict[str, str]) -> dict[str, str]:
     cat_fmts = [f for f in written if FORMATS[f][0] == "category"]
     p300_fmts = [f for f in written if FORMATS[f][0] == "p300"]
     configs = {}
-    base = {"stimulus_log": {"markers": "markers.csv", "trials": "trials.csv"},
+    base = {"stimulus_log": {"lab_export": "lab_export"},
             "fusion": {"normalize": "zscore", "unsure_threshold": 0.4, "calibration_file": "calibration.yaml"},
             "sequential": {"stop_confidence": 0.9, "min_repeats": 3},
             "evaluation": {"holdout": "session", "n_shuffles": 100, "n_noise": 20, "output_dir": "report"}}
