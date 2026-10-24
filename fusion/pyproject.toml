@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cortext-fusion"
+version = "0.1.0"
+description = "Adapter-based fusion of P300 and category/imagery EEG model outputs for the CorText MCQ task"
+requires-python = ">=3.9"
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "scipy>=1.10",
+  "pyyaml>=6.0",
+  "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+cortext-fusion = "cortext_fusion.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cortext_fusion*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

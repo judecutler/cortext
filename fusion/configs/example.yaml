@@ -1,0 +1,51 @@
+# CorText fusion layer: annotated example config.
+# Relative paths are resolved against THIS file's folder.
+# Copy this file, change `source:` and `adapter:` for your model, run
+#   cortext-fusion evaluate configs/my_config.yaml
+
+stimulus_log:
+  markers: ../data/session_markers.csv   # web app marker log: trial_id, option_id, true_category, is_target, repeat_index, ...
+  trials: ../data/session_trials.csv     # optional: clicked_option, valid, invalid_reason, option_order, ...
+
+models:
+  # ---- P300 detector: one decision score per flash epoch -------------------
+  - name: p300
+    role: p300
+    source: ../outputs/p300_scores.csv   # a file, or a folder of <trial_id>.json/.npy/.csv files
+    adapter: per_flash                   # see configs/adapter_cookbook.yaml for every adapter
+    options:
+      aggregate: mean                    # mean | sum | median over each option's flashes
+    lower_is_better: false               # true for distances / losses
+    weight: 1.0                          # P300 carries the decision by default
+    # normalize: zscore                  # per-model override of fusion.normalize
+
+  # ---- Category / imagery model: probabilities over categories ------------
+  - name: category
+    role: category
+    source: ../outputs/category_probs.csv
+    adapter: class_probabilities
+    options:
+      key_prefix: "p_"                   # CSV columns p_dog, p_cat, ... -> classes dog, cat, ...
+      # class_names: [dog, cat, ...]     # needed instead if the output is a bare array
+      # category_map: {puppy: dog}       # stimulus category -> model class, if names differ
+      check_target: true                 # flag when the top class is just the prompt's category
+    weight: 0.0                          # stays OFF until calibration shows it adds value on held-out data
+
+fusion:
+  normalize: zscore                      # zscore | logsoftmax | softmax | center | none (per trial, across options)
+  unsure_threshold: 0.4                  # confidence below this -> "unsure" (chance is 0.25 with 4 options)
+  temperature: 1.0                       # only used without a calibration file
+  calibration_file: calibration.yaml     # written by `cortext-fusion calibrate`; overrides the weights above if present
+  min_gain_logloss: 0.01                 # a 0-weight model is switched on only if held-out log-loss improves this much
+
+sequential:                              # live early stopping (server /sequential/* and the evaluation's simulation)
+  stop_confidence: 0.9
+  min_repeats: 3
+  max_repeats: null
+
+evaluation:
+  holdout: session                       # session | participant  (never random trials)
+  n_shuffles: 200                        # shuffled-label control
+  n_noise: 50                            # noise-score control (whole pipeline re-run on noise)
+  output_dir: report
+  seed: 0
