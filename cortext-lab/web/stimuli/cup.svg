@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+<title>cup</title>
+<path d="M46 70 h94 v52 a38 38 0 0 1 -38 38 h-18 a38 38 0 0 1 -38 -38 z" fill="#cf3b3b"/>
+<path d="M140 84 h12 a22 22 0 0 1 0 44 h-16" stroke="#cf3b3b" stroke-width="10" fill="none"/>
+<ellipse cx="93" cy="70" rx="47" ry="9" fill="#8a2323"/>
+<path d="M72 52 q-8 -12 0 -22 M96 52 q-8 -12 0 -22 M120 52 q-8 -12 0 -22" stroke="#9aa0a6" stroke-width="4" fill="none" stroke-linecap="round"/>
+</svg>

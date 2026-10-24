@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+<title>house</title>
+<rect x="40" y="92" width="120" height="88" fill="#e9c46a"/>
+<polygon points="28,96 100,32 172,96" fill="#b5412b"/>
+<rect x="84" y="126" width="32" height="54" fill="#6b4423"/><circle cx="110" cy="154" r="3" fill="#f2d9b3"/>
+<rect x="52" y="110" width="24" height="24" fill="#8ecae6" stroke="#333" stroke-width="3"/>
+<rect x="124" y="110" width="24" height="24" fill="#8ecae6" stroke="#333" stroke-width="3"/>
+<rect x="128" y="40" width="16" height="34" fill="#7a3320"/>
+</svg>

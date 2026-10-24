@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+<title>fish</title>
+<polygon points="150,100 192,64 192,136" fill="#e8591a"/>
+<ellipse cx="92" cy="100" rx="62" ry="40" fill="#f58a3a"/>
+<polygon points="80,62 112,62 98,38" fill="#e8591a"/><polygon points="80,138 108,138 94,160" fill="#e8591a"/>
+<path d="M120 66 q-14 34 0 68" stroke="#c9470f" stroke-width="3" fill="none"/>
+<circle cx="58" cy="90" r="8" fill="#fff"/><circle cx="56" cy="90" r="4" fill="#111"/>
+<path d="M36 108 q6 6 12 2" stroke="#222" stroke-width="3" fill="none" stroke-linecap="round"/>
+</svg>

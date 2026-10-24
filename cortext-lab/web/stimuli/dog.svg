@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+<title>dog</title>
+<ellipse cx="52" cy="88" rx="20" ry="42" fill="#6b4423" transform="rotate(12 52 88)"/>
+<ellipse cx="148" cy="88" rx="20" ry="42" fill="#6b4423" transform="rotate(-12 148 88)"/>
+<circle cx="100" cy="98" r="50" fill="#b87a3d"/>
+<ellipse cx="100" cy="122" rx="28" ry="22" fill="#f2d9b3"/>
+<ellipse cx="100" cy="110" rx="10" ry="7" fill="#222"/>
+<path d="M100 117 v10 M100 127 q-8 8 -16 3 M100 127 q8 8 16 3" stroke="#222" stroke-width="3" fill="none" stroke-linecap="round"/>
+<circle cx="80" cy="84" r="6" fill="#222"/><circle cx="120" cy="84" r="6" fill="#222"/>
+</svg>

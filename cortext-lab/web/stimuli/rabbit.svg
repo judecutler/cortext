@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+<title>rabbit</title>
+<ellipse cx="74" cy="46" rx="15" ry="42" fill="#d9d9d9"/><ellipse cx="126" cy="46" rx="15" ry="42" fill="#d9d9d9"/>
+<ellipse cx="74" cy="48" rx="7" ry="30" fill="#f4b6c4"/><ellipse cx="126" cy="48" rx="7" ry="30" fill="#f4b6c4"/>
+<circle cx="100" cy="122" r="54" fill="#d9d9d9"/>
+<circle cx="80" cy="112" r="6" fill="#222"/><circle cx="120" cy="112" r="6" fill="#222"/>
+<ellipse cx="100" cy="130" rx="8" ry="6" fill="#d65a7a"/>
+<path d="M100 136 v8 M100 144 q-8 7 -15 2 M100 144 q8 7 15 2" stroke="#222" stroke-width="3" fill="none" stroke-linecap="round"/>
+</svg>

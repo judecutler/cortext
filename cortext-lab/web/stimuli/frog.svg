@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+<title>frog</title>
+<ellipse cx="100" cy="118" rx="70" ry="52" fill="#3fae49"/>
+<circle cx="68" cy="72" r="24" fill="#3fae49"/><circle cx="132" cy="72" r="24" fill="#3fae49"/>
+<circle cx="68" cy="70" r="13" fill="#fff"/><circle cx="132" cy="70" r="13" fill="#fff"/>
+<circle cx="70" cy="70" r="7" fill="#111"/><circle cx="130" cy="70" r="7" fill="#111"/>
+<path d="M52 126 q48 38 96 0" stroke="#1d5e24" stroke-width="5" fill="none" stroke-linecap="round"/>
+<circle cx="90" cy="108" r="3" fill="#1d5e24"/><circle cx="110" cy="108" r="3" fill="#1d5e24"/>
+</svg>

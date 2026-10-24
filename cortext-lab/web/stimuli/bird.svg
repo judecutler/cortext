@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+<title>bird</title>
+<polygon points="40,120 8,100 12,142" fill="#1f5fa8"/>
+<ellipse cx="98" cy="118" rx="58" ry="42" fill="#2f86d6"/>
+<circle cx="142" cy="84" r="28" fill="#2f86d6"/>
+<polygon points="166,78 192,88 166,98" fill="#f2a30f"/>
+<circle cx="148" cy="78" r="5" fill="#fff"/><circle cx="149" cy="78" r="2.5" fill="#111"/>
+<ellipse cx="92" cy="122" rx="30" ry="20" fill="#1f5fa8" transform="rotate(-18 92 122)"/>
+<path d="M90 158 v22 M108 158 v22" stroke="#f2a30f" stroke-width="4" stroke-linecap="round"/>
+</svg>

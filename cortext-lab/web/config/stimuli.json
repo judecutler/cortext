@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "description": "Sample stimulus set: 6 animals, 3 objects, 3 shapes. All images are original CC0 SVGs (see web/stimuli/LICENSE.txt).",
+  "defaults": {
+    "options_per_trial": 4,
+    "tile_content": "image_text",
+    "prompt": "Which one is the {label}?",
+    "distractor_set": "mixed"
+  },
+  "prompts": {
+    "animal": "Which one is the {label}?",
+    "object": "Which one is the {label}?",
+    "shape": "Which one is the {label}?"
+  },
+  "items": [
+    { "id": "dog",      "category": "animal", "label": "dog",      "text": "Dog",      "image": "stimuli/dog.svg" },
+    { "id": "cat",      "category": "animal", "label": "cat",      "text": "Cat",      "image": "stimuli/cat.svg" },
+    { "id": "bird",     "category": "animal", "label": "bird",     "text": "Bird",     "image": "stimuli/bird.svg" },
+    { "id": "fish",     "category": "animal", "label": "fish",     "text": "Fish",     "image": "stimuli/fish.svg" },
+    { "id": "rabbit",   "category": "animal", "label": "rabbit",   "text": "Rabbit",   "image": "stimuli/rabbit.svg" },
+    { "id": "frog",     "category": "animal", "label": "frog",     "text": "Frog",     "image": "stimuli/frog.svg" },
+    { "id": "cup",      "category": "object", "label": "cup",      "text": "Cup",      "image": "stimuli/cup.svg" },
+    { "id": "umbrella", "category": "object", "label": "umbrella", "text": "Umbrella", "image": "stimuli/umbrella.svg" },
+    { "id": "house",    "category": "object", "label": "house",    "text": "House",    "image": "stimuli/house.svg" },
+    { "id": "circle",   "category": "shape",  "label": "circle",   "text": "Circle",   "image": "stimuli/circle.svg" },
+    { "id": "square",   "category": "shape",  "label": "square",   "text": "Square",   "image": "stimuli/square.svg" },
+    { "id": "triangle", "category": "shape",  "label": "triangle", "text": "Triangle", "image": "stimuli/triangle.svg" }
+  ],
+  "distractor_sets": {
+    "mixed": { "description": "any other item", "all": true },
+    "same_category": { "description": "other items of the target's category", "same_category": true },
+    "animals_only": { "members": ["dog", "cat", "bird", "fish", "rabbit", "frog"] }
+  },
+  "trial_plan": null,
+  "_trial_plan_example": [
+    { "target": "dog", "options": ["dog", "cat", "cup", "circle"], "tile_content": "image", "prompt": "Which one is the dog?" }
+  ]
+}

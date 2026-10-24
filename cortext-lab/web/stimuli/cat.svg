@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+<title>cat</title>
+<polygon points="52,70 58,22 92,52" fill="#e08a2e"/><polygon points="148,70 142,22 108,52" fill="#e08a2e"/>
+<polygon points="60,60 62,38 80,54" fill="#f4b6b6"/><polygon points="140,60 138,38 120,54" fill="#f4b6b6"/>
+<circle cx="100" cy="104" r="52" fill="#e08a2e"/>
+<ellipse cx="80" cy="92" rx="7" ry="9" fill="#222"/><ellipse cx="120" cy="92" rx="7" ry="9" fill="#222"/>
+<polygon points="92,112 108,112 100,122" fill="#d65a7a"/>
+<path d="M100 122 q-8 10 -18 4 M100 122 q8 10 18 4" stroke="#222" stroke-width="3" fill="none" stroke-linecap="round"/>
+<path d="M40 112 l-26 -6 M40 122 l-26 6 M160 112 l26 -6 M160 122 l26 6" stroke="#222" stroke-width="2.5" stroke-linecap="round"/>
+</svg>
