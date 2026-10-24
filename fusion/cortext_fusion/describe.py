@@ -66,9 +66,16 @@ def describe(path: str | Path, metas: Mapping[str, TrialMeta] | None = None, cla
                      f"min={fin.min():.4g}, max={fin.max():.4g}, mean={fin.mean():.4g}, std={fin.std():.4g}")
         lines.append(f"All values in [0,1]: {bool(fin.size and fin.min() >= 0 and fin.max() <= 1)}")
     if metas:
+        from .pipeline import match_trial_ids
+        raw, translated = match_trial_ids(raw, metas)
+        ids = list(raw)
+        if translated:
+            lines.append(f"Trial ids translated to stimulus-log keys: {len(translated)} "
+                         f"(e.g. {next(iter(translated.items()))})")
         common = [t for t in ids if t in metas]
+        n_run = sum(1 for m in metas.values() if m.flashes)
         lines.append(f"Trial ids matching the stimulus log: {len(common)}/{len(ids)} "
-                     f"(log has {len(metas)})")
+                     f"(log has {n_run} trials with flashes, {len(metas)} in total)")
         if not common:
             lines.append(f"  !! No ids match. Log ids look like {list(metas)[:3]}.")
             return "\n".join(lines)

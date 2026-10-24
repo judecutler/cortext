@@ -41,6 +41,7 @@ class TrialMeta:
     participant_id: str | None = None
     prompt: str | None = None
     flashes: list[Flash] = field(default_factory=list)  # in presentation order
+    local_trial_id: str | None = None  # the app's own trial id (trial_id above may be "session:trial")
 
     @property
     def n_options(self) -> int:

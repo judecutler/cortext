@@ -9,7 +9,7 @@ from cortext_fusion.evaluate import evaluate, wilson_ci
 from cortext_fusion.fusion import Fuser
 from cortext_fusion.io import load_any, watch_folder
 from cortext_fusion.pipeline import fuse_dataset, load_dataset
-from cortext_fusion.stimulus_log import load_stimulus_log
+from cortext_fusion.stimulus_log import load_lab_export, load_stimulus_log
 
 MOCK_CONFIGS = ["mock_config.yaml", "config_p300_epoch_prob_csv.yaml", "config_p300_predict_proba_npy.yaml",
                 "config_p300_grid_npy.yaml", "config_p300_peak_amplitude_json.yaml", "config_p300_probs_json.yaml",
@@ -17,15 +17,47 @@ MOCK_CONFIGS = ["mock_config.yaml", "config_p300_epoch_prob_csv.yaml", "config_p
                 "config_category_class_probs_npy.yaml", "config_category_embedding_npy.yaml"]
 
 
-def test_stimulus_log(mock_dir):
-    metas = load_stimulus_log(mock_dir / "markers.csv", mock_dir / "trials.csv")
-    m = next(iter(metas.values()))
-    assert m.option_ids == ["A", "B", "C", "D"] and m.n_repeats == 6 and len(m.flashes) == 24
-    assert m.target_category == m.category_of(m.target_option)
-    assert any(not x.valid and x.invalid_reason for x in metas.values())
-    # markers alone still work (target from is_target)
-    m2 = load_stimulus_log(mock_dir / "markers.csv")[m.trial_id]
-    assert m2.target_option == m.target_option and m2.clicked_option is None
+def test_lab_export_loading(mock_dir):
+    metas = load_lab_export(mock_dir / "lab_export")
+    run = [m for m in metas.values() if m.flashes]
+    m = run[0]
+    assert ":" in m.trial_id and m.local_trial_id == m.trial_id.split(":")[1]
+    assert len(m.option_ids) == 4 and m.n_repeats == 6 and len(m.flashes) == 24  # flash_off etc. ignored
+    assert m.target_category == m.category_of(m.target_option) and m.participant_id.startswith("P")
+    assert m.session_id.startswith(m.participant_id)
+    assert any(not x.valid and x.invalid_reason in ("misclick", "blink_or_movement", "distracted",
+                                                  "equipment_glitch") for x in run)
+    aborted = [x for x in metas.values() if not x.flashes]
+    assert aborted and all(not x.valid and x.invalid_reason == "aborted" for x in aborted)  # kept, never dropped
+    assert len({x.session_id for x in metas.values()}) == 4
+
+
+def test_lab_export_zip_and_single_session(mock_dir, tmp_path):
+    import zipfile
+    zpath = tmp_path / "cortext_all_sessions.zip"
+    sessions = sorted((mock_dir / "lab_export").iterdir())
+    with zipfile.ZipFile(zpath, "w") as z:
+        for sd in sessions:
+            for f in sd.iterdir():
+                z.write(f, f"{sd.name}/{f.name}")
+    assert len(load_lab_export(zpath)) == len(load_lab_export(mock_dir / "lab_export"))
+    one = load_lab_export(sessions[0])  # a single session folder
+    assert len({m.session_id for m in one.values()}) == 1
+
+
+def test_trial_id_matching(mock_dir):
+    from cortext_fusion.pipeline import match_trial_ids
+    all_metas = load_lab_export(mock_dir / "lab_export")
+    k = next(iter(all_metas))
+    s, t = k.split(":")
+    out, tr = match_trial_ids({f"{s}__{t}": 1}, all_metas)
+    assert list(out) == [k] and tr
+    # bare trial id is ambiguous across sessions -> left unmatched
+    out, _ = match_trial_ids({t: 1}, all_metas)
+    assert list(out) == [t]
+    one = {kk: m for kk, m in all_metas.items() if m.session_id == s}
+    out, _ = match_trial_ids({f"{float(t)}": 1}, one)
+    assert list(out) == [k]
 
 
 def test_stimulus_log_aliases_and_inferred_repeats():
@@ -34,6 +66,14 @@ def test_stimulus_log_aliases_and_inferred_repeats():
     m = load_stimulus_log(mdf)["x"]
     assert m.target_option == "B" and m.option_categories == list("wxyz")
     assert [f.repeat_index for f in m.flashes] == [0, 0, 0, 0, 1, 1, 1, 1]
+
+
+def test_generic_log_composite_keys_when_ids_repeat():
+    mdf = pd.DataFrame({"session_id": ["s1"] * 4 + ["s2"] * 4, "trial_id": [0] * 8, "event": ["flash_on"] * 8,
+                        "option_id": list("ABCD") * 2, "category": list("wxyz") * 2})
+    metas = load_stimulus_log(mdf)
+    assert sorted(metas) == ["s1:0", "s2:0"]
+    assert sorted(load_stimulus_log(mdf, key_mode="session")) == ["s1:0", "s2:0"]
 
 
 @pytest.mark.parametrize("cfg_name", MOCK_CONFIGS)
@@ -90,12 +130,11 @@ def test_alignment_diagnostics(mock_dir, tmp_path):
     raw = load_any(mock_dir / "outputs" / "p300_peak_amplitude.json")
     ids = list(raw)
     bad = {k: v for k, v in raw.items() if k not in ids[:10]}
-    bad["not_a_trial"] = {"A": 1, "B": 2, "C": 3, "D": 4}
-    bad[ids[20]] = {"A": 1, "B": 1, "C": 1, "D": 1}          # constant
-    bad[ids[21]] = {"A": float("nan"), "B": 1, "C": 2, "D": 3}  # NaN
+    bad["not_a_trial"] = [1, 2, 3, 4]
+    bad[ids[20]] = [1, 1, 1, 1]                                # constant
+    bad[ids[21]] = [float("nan"), 1, 2, 3]                     # NaN
     bad[ids[22]] = [1, 2, 3]                                   # wrong length
-    cfg = config_from_dict({"stimulus_log": {"markers": str(mock_dir / "markers.csv"),
-                                             "trials": str(mock_dir / "trials.csv")},
+    cfg = config_from_dict({"stimulus_log": {"lab_export": str(mock_dir / "lab_export")},
                             "models": [{"name": "p300", "adapter": "per_option", "source": "x"}]})
     ds = load_dataset(cfg, sources={"p300": bad})
     codes = {i.code for i in ds.issues}

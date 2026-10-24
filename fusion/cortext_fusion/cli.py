@@ -5,7 +5,7 @@ mock       write a fake stimulus log + model outputs in every format + configs
 evaluate   held-out evaluation with controls; writes report/ (report.md, plots, metrics.json)
 calibrate  learn fusion weights on labeled validation trials -> calibration.yaml
 fuse       fuse every trial in the stimulus log -> predictions.csv
-serve      local HTTP server for the demo app (use --mock to fake predictions)
+serve      live servers: WebSocket for the CorText Lab app + HTTP for the models (--mock to fake scores)
 watch      fuse per-trial output files as they appear in folders
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 def _cmd_describe(a) -> int:
     from .describe import describe
     from .stimulus_log import load_stimulus_log
-    metas = load_stimulus_log(a.markers, a.trials) if a.markers else None
+    metas = load_stimulus_log(a.markers, a.trials) if a.markers else None  # a folder/.zip = CorText Lab export
     cn = [c.strip() for c in a.class_names.split(",")] if a.class_names else None
     if a.class_names_file:
         cn = [l.strip() for l in Path(a.class_names_file).read_text().splitlines() if l.strip()]
@@ -133,7 +133,8 @@ def _cmd_fuse(a) -> int:
 
 
 def _cmd_serve(a) -> int:
-    from .server import Predictor, serve
+    import threading
+    from .server import Predictor, serve, serve_ws
     if a.config:
         from .config import load_config
         pred = Predictor.from_config(load_config(a.config), mock=a.mock, mock_accuracy=a.mock_accuracy)
@@ -142,15 +143,27 @@ def _cmd_serve(a) -> int:
     else:
         print("serve needs a config, or --mock", file=sys.stderr)
         return 2
-    httpd = serve(pred, a.host, a.port, verbose=a.verbose)
-    print(f"cortext-fusion server on http://{a.host}:{a.port}  ({'MOCK' if pred.mock else 'real'} predictions; "
-          f"weights {pred.fuser.weights}). Ctrl-C to stop.")
+    servers = [serve(pred, a.host, a.http_port, verbose=a.verbose)]
+    if not a.no_ws:
+        servers.append(serve_ws(pred, a.host, a.ws_port, verbose=a.verbose))
+    mode = "MOCK predictions (random: the app sends no labels)" if pred.mock else "real predictions"
+    print(f"cortext-fusion: {mode}; weights {pred.fuser.weights}")
+    if not a.no_ws:
+        print(f"  CorText Lab app  -> ws://{a.host}:{a.ws_port}   (set the app's predictor to 'ws' with this URL)")
+    print(f"  models / scripts -> http://{a.host}:{a.http_port}  (POST /sequential/flash, /predict, ...)")
+    print("Ctrl-C to stop.")
+    threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
+    for t in threads:
+        t.start()
     try:
-        httpd.serve_forever()
+        while True:
+            time.sleep(0.5)
     except KeyboardInterrupt:
         pass
     finally:
-        httpd.server_close()
+        for s in servers:
+            s.shutdown()
+            s.server_close()
     return 0
 
 
@@ -158,7 +171,7 @@ def _cmd_watch(a) -> int:
     from .config import load_config
     from .io import load_single_trial_file, trial_id_from_name, PER_TRIAL_SUFFIXES
     from .server import Predictor
-    from .stimulus_log import load_stimulus_log
+    from .pipeline import match_trial_ids
     cfg = load_config(a.config)
     pred = Predictor.from_config(cfg)
     folders = {}
@@ -176,7 +189,7 @@ def _cmd_watch(a) -> int:
     print(f"Watching {', '.join(f'{k}={v}' for k, v in folders.items())}; fusing when {sorted(required)} are present.")
     try:
         while True:
-            metas = load_stimulus_log(cfg.resolve(cfg.markers), cfg.resolve(cfg.trials) if cfg.trials else None)
+            metas = cfg.load_metas()
             for name, folder in folders.items():
                 if not folder.exists():
                     continue
@@ -189,7 +202,8 @@ def _cmd_watch(a) -> int:
                         continue  # still being written
                     seen.add(p)
                     pending.setdefault(trial_id_from_name(p, cfg.model(name).file_pattern), {})[name] = raw
-            for tid, outs in list(pending.items()):
+            remapped, _ = match_trial_ids(pending, metas)
+            for tid, outs in list(remapped.items()):
                 if tid in done or tid not in metas or not required <= set(outs):
                     continue
                 r = pred.predict(metas[tid], outs)
@@ -218,7 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("describe", help="inspect a model output file and suggest an adapter")
     d.add_argument("file")
-    d.add_argument("--markers", help="stimulus marker log (improves detection, checks trial ids)")
+    d.add_argument("--markers", help="CorText Lab export (folder or .zip) or a marker log CSV; improves detection and checks trial ids")
     d.add_argument("--trials", help="stimulus trial table")
     d.add_argument("--class-names", help="comma-separated class names, in model output order")
     d.add_argument("--class-names-file")
@@ -264,7 +278,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--mock", action="store_true", help="fake predictions (no models needed)")
     s.add_argument("--mock-accuracy", type=float, default=0.8)
     s.add_argument("--host", default="127.0.0.1")
-    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--ws-port", type=int, default=8765, help="WebSocket for the CorText Lab app (its default URL)")
+    s.add_argument("--http-port", type=int, default=8766, help="HTTP for models and scripts")
+    s.add_argument("--no-ws", action="store_true", help="HTTP only")
     s.add_argument("--verbose", action="store_true")
     s.set_defaults(func=_cmd_serve)
 

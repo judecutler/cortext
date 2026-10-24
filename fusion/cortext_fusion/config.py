@@ -50,6 +50,9 @@ class SequentialConfig:
     stop_confidence: float = 0.9
     min_repeats: int = 3
     max_repeats: int | None = None
+    input: str = "prob"          # live per-flash values: "prob" = P(target) per epoch, "score" = raw decision score
+    scale: float = 1.0           # evidence per unit of log-odds/score (fit with SequentialFuser.fit_scale)
+    final_wait_s: float = 1.0    # after trial_end, wait this long for late scores (the app times out at 3 s)
 
 
 @dataclass
@@ -67,6 +70,8 @@ class Config:
     models: list[ModelConfig]
     markers: str | None = None
     trials: str | None = None
+    lab_export: list[str] | None = None   # CorText Lab exports: session folders, "export all" folders or .zip files
+    key_mode: str = "auto"
     fusion: FusionConfig = field(default_factory=FusionConfig)
     sequential: SequentialConfig = field(default_factory=SequentialConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
@@ -83,6 +88,22 @@ class Config:
             if m.name == name:
                 return m
         raise KeyError(f"no model named {name!r} in config (have {[m.name for m in self.models]})")
+
+    def load_metas(self):
+        """Load the stimulus log named in the config -> {trial_key: TrialMeta}."""
+        from .stimulus_log import load_lab_export, load_stimulus_log
+        if self.lab_export:
+            import glob
+            paths: list[str] = []
+            for p in self.lab_export:
+                rp = str(self.resolve(p))
+                hits = sorted(glob.glob(rp))
+                paths += hits or [rp]
+            return load_lab_export(paths)
+        if self.markers is None:
+            raise ValueError("config needs stimulus_log.lab_export (CorText Lab exports) or stimulus_log.markers")
+        return load_stimulus_log(self.resolve(self.markers), self.resolve(self.trials) if self.trials else None,
+                                 key_mode=self.key_mode)
 
     @property
     def enabled_models(self) -> list[ModelConfig]:
@@ -124,10 +145,14 @@ def config_from_dict(d: dict[str, Any], base_dir: str | Path | None = None) -> C
         raise ValueError("evaluation.holdout must be 'session' or 'participant' (never random trials)")
     if d:
         raise ValueError(f"unknown top-level config key(s): {sorted(d)}")
-    unknown_stim = set(stim) - {"markers", "trials"}
+    unknown_stim = set(stim) - {"markers", "trials", "lab_export", "key_mode"}
     if unknown_stim:
         raise ValueError(f"stimulus_log: unknown key(s) {sorted(unknown_stim)}")
-    cfg = Config(models=models, markers=stim.get("markers"), trials=stim.get("trials"), fusion=fusion,
+    lab = stim.get("lab_export")
+    if isinstance(lab, str):
+        lab = [lab]
+    cfg = Config(models=models, markers=stim.get("markers"), trials=stim.get("trials"), lab_export=lab,
+                 key_mode=stim.get("key_mode", "auto"), fusion=fusion,
                  sequential=seq, evaluation=ev, base_dir=Path(base_dir) if base_dir else Path.cwd())
     for m in cfg.models:  # validate adapters early so typos fail at load time
         m.options = {k: (str(cfg.resolve(v)) if k in ("embeddings", "class_names_file") and isinstance(v, str) else v)

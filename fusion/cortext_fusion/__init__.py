@@ -17,6 +17,6 @@ from .io import load_any, watch_folder
 from .pipeline import Dataset, Issue, fuse_dataset, load_dataset
 from .schema import Flash, FusedPrediction, TrialMeta, TrialScores
 from .server import Predictor
-from .stimulus_log import load_stimulus_log
+from .stimulus_log import load_lab_export, load_stimulus_log
 
 __version__ = "0.1.0"
