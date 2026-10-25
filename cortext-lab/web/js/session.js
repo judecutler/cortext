@@ -10,7 +10,7 @@ export class InterruptError extends Error {
   constructor(kind) { super(kind); this.kind = kind; }
 }
 
-const INTERRUPTIBLE = new Set(['prompt', 'flash', 'response']);
+const INTERRUPTIBLE = new Set(['prompt', 'imagery', 'flash', 'response']);
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); promise.catch(() => {}); return { promise, resolve, reject }; };
 
 export function measureRefresh(frames = 40) {
@@ -286,7 +286,7 @@ export class SessionRunner {
     const t = this.current;
     if (!t) return;
     if (this.phase === 'response' && this._resp) this._resp.resolve({ optionId, ts });
-    else if (this.phase === 'prompt' || this.phase === 'flash') {
+    else if (this.phase === 'prompt' || this.phase === 'imagery' || this.phase === 'flash') {
       const o = t.options.find((x) => x.id === optionId);
       t.early_clicks.push({ t_ms: ts, option_id: optionId, phase: this.phase });
       this.markers.emit('early_click', { ...this._tf(t), option_id: optionId, category: o?.category, extra: { phase: this.phase } });

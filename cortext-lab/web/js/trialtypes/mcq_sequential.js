@@ -7,7 +7,7 @@
 // epoching and detector code works for both modes.
 import { sleep } from '../util.js';
 import { makeFlashPlan, runFlashPlan } from '../flasher.js';
-import { optFields, responsePhase } from './common.js';
+import { optFields, responsePhase, imageryPhase } from './common.js';
 
 export const mcqSequential = {
   id: 'mcq_sequential',
@@ -31,6 +31,7 @@ export const mcqSequential = {
       ctx.setPhase('prompt');
       await ctx.frame((ts) => { ui.showPrompt(); ctx.mark('prompt_on', {}, ts); });
       await ctx.guard(sleep(s.prompt_ms));
+      await imageryPhase(ctx, trial);   // no-op unless imagery_ms > 0
 
       // ---- 2. options one at a time (question stays) ----
       const plan = makeFlashPlan({

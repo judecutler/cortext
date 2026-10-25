@@ -1,5 +1,29 @@
 // Shared pieces of the MCQ trial types: the response phase (cue -> wait for click -> record) and flash-marker fields.
 import { recordClick, applyValidity } from '../trial.js';
+import { sleep } from '../util.js';
+import { IMAGERY_SETTLE_MS } from '../settings.js';
+
+/**
+ * Optional imagery window (settings.imagery_ms > 0), run between the prompt and the flashes.
+ * Dark stage with a fixation cross; the participant pictures the answer. Markers: imagery_on (option_id / category of
+ * the correct answer, i.e. what they were asked to picture) and imagery_off, both frame-locked. Then the options come
+ * back and we wait IMAGERY_SETTLE_MS so their onset response stays out of the first flash epochs.
+ */
+export async function imageryPhase(ctx, trial) {
+  const { settings: s, ui } = ctx;
+  if (!(s.imagery_ms > 0)) return;
+  const o = trial.options.find((x) => x.id === trial.true_answer_id) || {};
+  ctx.setPhase('imagery');
+  await ctx.frame((ts) => {
+    ui.showImagery();
+    ctx.mark('imagery_on', { option_id: o.id, option_position: o.position, category: o.category, is_target: true,
+      extra: { imagery_ms: s.imagery_ms, label: o.label ?? null } }, ts);
+  });
+  await ctx.guard(sleep(s.imagery_ms));
+  await ctx.frame((ts) => { ui.endImagery(); ctx.mark('imagery_off', { option_id: o.id, category: o.category }, ts); });
+  ctx.setPhase('prompt');
+  await ctx.guard(sleep(IMAGERY_SETTLE_MS));
+}
 
 /** Marker fields describing one option in a flash/stimulus event. */
 export const optFields = (o, ev) => ({

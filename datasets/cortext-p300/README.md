@@ -15,6 +15,9 @@ X, y, info = load_epochs()                       # real sessions, valid trials, 
 X, y, info = load_epochs(bucket="final")         # only sessions labelled with that bucket
 X, y, info = load_epochs(channels=["Pz", "POz", "Cz"], tmin=0.0, tmax=0.8)
 epochs = to_mne(X, info, y)                      # MNE EpochsArray (event 1 = target)
+
+from cortext_data import load_imagery             # sessions recorded with the imagery window (others are skipped)
+Xi, yi, info_i = load_imagery()                  # yi = concept the participant pictured ("dog", ...); split by info_i["groups"]
 ```
 
 **Evaluate honestly.** Always split by `info["groups"]` (session:trial) with `GroupKFold`, so epochs from the same
@@ -33,6 +36,10 @@ simulated/<session_id>/        fake_eeg.py runs (never mix into results)
   epochs.npz     X (n, channels, times) cleaned + baseline-corrected, times (s), y (1 = attended answer's flash),
                  trial_id, trial_index, option_id, option_position, category, repeat_index, flash_index,
                  mode (flash | sequential), trial_valid, rejected_artifact, clicked_option_id, onset_lsl, session_id
+  imagery.npz    only if the session used the imagery window (Experiment → Design → Imagery window > 0): one epoch per
+                 trial, -200 ms .. imagery_ms after imagery_on, baseline -200..0 ms; X, times, labels, srate, trial_id,
+                 option_id + category (the correct answer the participant was asked to picture), trial_valid,
+                 rejected_artifact, clicked_option_id, onset_lsl, session_id
   events.csv     every marker (lsl_time, sample index into eeg_clean, event, trial/option fields)
   trials.csv     the app's trial table (validity after operator review, click, correct, model prediction)
 ```

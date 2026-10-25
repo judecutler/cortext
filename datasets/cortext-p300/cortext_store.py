@@ -52,8 +52,8 @@ INDEX_COLUMNS = ["session_id", "folder", "simulated", "bucket", "participant_id"
                  "uploaded", "complete"]
 # What `pull` fetches. "epochs" is enough to train a model and is a fraction of the size of "all".
 PULL_PROFILES = {
-    "epochs": ["meta.json", "trials.csv", "events.csv", "epochs.npz"],
-    "all": ["meta.json", "trials.csv", "events.csv", "epochs.npz", "eeg_clean.npz", "eeg_raw.npz"],
+    "epochs": ["meta.json", "trials.csv", "events.csv", "epochs.npz", "imagery.npz"],   # imagery.npz: only sessions with
+    "all": ["meta.json", "trials.csv", "events.csv", "epochs.npz", "imagery.npz", "eeg_clean.npz", "eeg_raw.npz"],  # the imagery window
 }
 RAW_FILE = "eeg_raw.npz"
 

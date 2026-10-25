@@ -51,7 +51,22 @@ X, y, info = load_epochs()     # X: (epochs, 8 channels, 250 samples) µV, y: 1 
 Then:
 - Train the live scorer and check it with honest controls: `python cortext-lab/pipeline/train_p300.py`
 - Use the trained model live: `python cortext-lab/bridge/bridge.py --p300-model p300_model.npz`
+- Image model: sessions recorded with the **imagery window** (below) also get `imagery.npz`. Load it with
+  `from cortext_data import load_imagery; X, y, info = load_imagery()` (y = the concept pictured, e.g. "dog").
 - Organise sessions with *buckets* (a label such as `pilot` or `final`) on the Experiment → Recorded sessions page, then `load_epochs(bucket="final")`.
+
+### Imagery window (optional, for the image model)
+
+Experiment → Design → **Imagery window (ms)**. `0` (default) changes nothing. With e.g. `2500`:
+
+1. The question appears as usual (its hint now says to picture the answer when the screen goes dark).
+2. The screen goes black with a white **+** for 2.5 s. The participant pictures the answer (the dog, not the word "dog") and keeps their eyes on the +.
+3. The options come back. 1 s later the flashing starts, so the options reappearing does not land in the first flash epochs.
+
+Markers `imagery_on` / `imagery_off` (frame-locked, labelled with the correct answer) go everywhere the flash markers go,
+and the dataset gets `imagery.npz`. Each trial is about 3.5 s longer. Use only stimuli whose concepts the image model
+was trained on (dog, bird and fish are in the built-in set). Treat imagery results as unverified until a model trained
+on `imagery.npz` beats a shuffled-label control on held-out sessions.
 
 ## 4. How the automatic cleaning works
 

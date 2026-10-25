@@ -1,7 +1,7 @@
-// mcq_flash: prompt -> randomized option flashes (in place) -> click to declare answer -> (post phase in SessionRunner).
+// mcq_flash: prompt -> [optional imagery window] -> randomized option flashes (in place) -> click to declare answer -> (post phase in SessionRunner).
 import { sleep } from '../util.js';
 import { makeFlashPlan, runFlashPlan } from '../flasher.js';
-import { optFields, responsePhase } from './common.js';
+import { optFields, responsePhase, imageryPhase } from './common.js';
 
 export const mcqFlash = {
   id: 'mcq_flash',
@@ -26,6 +26,7 @@ export const mcqFlash = {
       ctx.setPhase('prompt');
       await ctx.frame((ts) => { ui.showPrompt(); ctx.mark('prompt_on', {}, ts); });
       await ctx.guard(sleep(s.prompt_ms));
+      await imageryPhase(ctx, trial);   // no-op unless imagery_ms > 0
 
       // ---- 2. flash ----
       const plan = makeFlashPlan({

@@ -115,6 +115,56 @@ def load_epochs(sessions=None, root=ROOT, valid_only=True, drop_rejected=True, c
     return np.concatenate(Xs), y, info
 
 
+def load_imagery(sessions=None, root=ROOT, valid_only=True, drop_rejected=True, channels=None, include_simulated=False,
+                 bucket=None):
+    """Epochs from the optional imagery window (sessions recorded with imagery_ms > 0; others are skipped).
+
+    X: (n, channels, time) uV, -200 ms .. imagery_ms after the window opened, baseline -200..0 ms.
+    y: the concept the participant was asked to picture (option_id of the correct answer), as strings.
+    info["category"], info["groups"] ("session:trial"), info["labels"], info["times"], ...
+    Sessions with different window lengths are cut to the shortest.
+    """
+    rows = list_sessions(root, include_simulated)
+    if bucket is not None:
+        want = {bucket} if isinstance(bucket, str) else set(bucket)
+        rows = [r for r in rows if r.get("bucket") in want]
+    if sessions is not None:
+        rows = [r for r in rows if r["session_id"] in sessions]
+    parts = []
+    for r in rows:
+        path = os.path.join(root, r["folder"], "imagery.npz")
+        if not os.path.exists(path):
+            continue
+        z = dict(np.load(path, allow_pickle=False))
+        if not len(z["X"]):
+            continue
+        lab = [str(l) for l in z["labels"]]
+        if channels is not None:
+            missing = [c for c in channels if c not in lab]
+            if missing:
+                raise ValueError(f"session {r['session_id']} has no channel(s) {missing}")
+            z["X"] = z["X"][:, [lab.index(c) for c in channels]]
+            lab = list(channels)
+        m = np.ones(len(z["X"]), bool)
+        if valid_only:
+            m &= z["trial_valid"]
+        if drop_rejected:
+            m &= ~z["rejected_artifact"]
+        parts.append((z, m, lab))
+    if not parts:
+        return np.zeros((0, 0, 0), np.float32), np.zeros(0, str), {"labels": [], "times": np.zeros(0), "groups": np.array([])}
+    if len({tuple(p[2]) for p in parts}) > 1:
+        raise ValueError("sessions differ in channels; pass channels= to align them")
+    n_t = min(p[0]["X"].shape[2] for p in parts)
+    keys = ["trial_id", "option_id", "category", "trial_valid", "rejected_artifact", "clicked_option_id", "onset_lsl", "session_id"]
+    X = np.concatenate([p[0]["X"][p[1]][:, :, :n_t] for p in parts])
+    info = {k: np.concatenate([p[0][k][p[1]] for p in parts]) for k in keys}
+    y = info.pop("option_id")
+    info["groups"] = np.array([f"{s}:{t}" for s, t in zip(info["session_id"], info["trial_id"])])
+    info["labels"], info["times"] = parts[0][2], parts[0][0]["times"][:n_t]
+    return X, y, info
+
+
 def load_continuous(session, root=ROOT, clean=True):
     """(data: channels x samples in uV, times: LSL seconds, labels, srate) for one session."""
     name = "eeg_clean.npz" if clean else "eeg_raw.npz"

@@ -310,3 +310,10 @@ dialog.modal h2 { margin-top: 0; }
 .chip-btn:hover:not(:disabled) { color: var(--text); }
 .chip-btn:disabled { opacity: .3; cursor: default; }
 .plan-answer { font-size: 13px; color: var(--muted); }
+
+/* imagery window (optional, settings.imagery_ms): dark stage, fixation cross only. No transition: the change is one frame. */
+.stage .fixation { display: none; }
+.stage[data-phase="imagery"] .fixation { display: flex; position: absolute; inset: 0; align-items: center; justify-content: center;
+  color: #fff; font: 400 64px/1 var(--mono, monospace); pointer-events: none; }
+.stage[data-phase="imagery"] .prompt, .stage[data-phase="imagery"] .subprompt,
+.stage[data-phase="imagery"] .tiles, .stage[data-phase="imagery"] .presenter { visibility: hidden; }
