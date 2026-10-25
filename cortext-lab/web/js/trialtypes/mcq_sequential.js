@@ -6,7 +6,7 @@
 // Markers use the same schema as flash mode (event `flash_on` / `flash_off`, extra.mode = "sequential") so the same
 // epoching and detector code works for both modes.
 import { makeFlashPlan, runFlashPlan } from '../flasher.js';
-import { optFields, responsePhase, promptPhase, stimulusOn, stimulusOff, narrateGuess } from './common.js';
+import { optFields, responsePhase, promptPhase, stimulusOn, stimulusOff, narrateGuess, imageryPhase } from './common.js';
 
 export const mcqSequential = {
   id: 'mcq_sequential',
@@ -29,6 +29,7 @@ export const mcqSequential = {
       // ---- 1. question alone ----
       ctx.setPhase('prompt');
       await promptPhase(ctx, trial);
+      await imageryPhase(ctx, trial);   // no-op unless imagery_ms > 0
 
       // ---- 2. options one at a time (question stays) ----
       const plan = makeFlashPlan({

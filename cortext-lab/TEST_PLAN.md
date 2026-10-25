@@ -12,6 +12,8 @@ python tests/e2e_sequential.py        # upload (folder, config+images, warnings,
 python tests/test_store.py            # storage layer against a FAKE Hugging Face API: push, pull, buckets, local + remote delete, migrate
 python tests/e2e_sessions.py          # sessions page: badges, buckets, real deletion (needs an empty bridge/logs/), refuses running sessions, CSRF guard
 python tests/e2e_presets.py           # question list, shuffle buttons, presets save/load/export/import, running from a list
+python tests/test_imagery.py         # imagery window: pipeline writes imagery.npz with the right labels and timing; plain sessions unchanged
+python tests/e2e_imagery.py          # imagery window in both modes: off by default, dark stage + fixation only, markers, 1 s settle before flashes
 python tests/e2e_panel.py             # run view: Hide/Show panel button and the I key
 python tests/test_voice.py            # voice endpoints against a FAKE LLM: custom context, honesty rules, missing key, CSRF; TTS if installed
 python tests/e2e_voice.py             # question aloud, audio-only stimuli (markers + latency), narrator before/after click, name kept out of data

@@ -8,6 +8,9 @@ export const DEFAULT_SETTINGS = {
   options_per_trial: 4,
   tile_content: 'image_text',      // image | text | image_text (what each stimulus shows, in both modes)
   prompt_ms: 2000,                 // question shown before anything else happens
+  imagery_ms: 0,                   // 0 = off. >0: after the prompt, a dark screen with a fixation cross for this long while the
+                                   // participant pictures the answer (imagery_on / imagery_off markers), then IMAGERY_SETTLE_MS
+                                   // with the options back on screen before the first flash
   // --- flash mode ---
   repeats: 10,                     // flashes per option per trial
   on_ms: 500,
@@ -47,6 +50,10 @@ export const DEFAULT_SETTINGS = {
   seed: null,
 };
 
+/** After the imagery window the options come back on screen; wait this long before the first flash so their onset
+ *  response does not land in the first flash epochs. */
+export const IMAGERY_SETTLE_MS = 1000;
+
 const LS_KEY = 'cortext-lab.settings.v1';
 
 export function loadSettings() {
@@ -71,7 +78,8 @@ export function estimateDurations(s) {
   const flashes = s.options_per_trial * p.repeats;
   const avgOff = (p.off_min_ms + p.off_max_ms) / 2;
   const flashSec = (flashes * (p.on_ms + avgOff)) / 1000;
-  const trialSec = flashSec + s.prompt_ms / 1000 + 6; // + ~6 s for response/review
+  const imagerySec = s.imagery_ms > 0 ? (s.imagery_ms + IMAGERY_SETTLE_MS) / 1000 : 0;
+  const trialSec = flashSec + s.prompt_ms / 1000 + imagerySec + 6; // + ~6 s for response/review
   return { flashes, flashSec, trialSec, totalMin: (trialSec * s.n_trials) / 60 };
 }
 

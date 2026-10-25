@@ -70,6 +70,7 @@ export async function renderExperiment(root, app) {
     num('n_trials', 'Questions', 'Each target is used once before any repeats.', { min: 1 }),
     num('options_per_trial', 'Options per question', '2–6; the grid adapts.', { min: 2, max: 6 }),
     num('prompt_ms', 'Prompt shown first (ms)', 'Time to read the question before anything else happens.', { min: 0 }),
+    num('imagery_ms', 'Imagery window (ms)', '0 = off. Otherwise, after the question the screen goes dark with a + for this long while the participant pictures the answer; then the options return for 1 s before flashing. Saved as imagery.npz for the image model. 2000–3000 typical.', { min: 0, step: 100 }),
     sel('tile_content', 'What each stimulus shows', [['image_text', 'Image + text'], ['image', 'Image only'], ['text', 'Text only']], 'Applies to the one-at-a-time view and to the answer tiles.'),
     estimate);
   const flashCard = h('div', { class: 'card' }, h('h2', {}, 'Flash timing (flash mode)'),
@@ -188,7 +189,8 @@ export async function renderExperiment(root, app) {
   async function loadPreset() {
     const p = getPreset(presetSel.value);
     if (!p) return;
-    for (const [k, v] of Object.entries(p.settings)) {
+    // A preset that predates the imagery window has no imagery_ms: treat that as OFF so a value left in the form can't leak into it.
+    for (const [k, v] of Object.entries({ imagery_ms: 0, ...p.settings })) {
       const el = inputs[k];
       if (!el) continue;
       if (k === 'stimuli_source') { if ([...el.options].some((o) => o.value === v)) el.value = v; else toast(`The stimulus set “${String(v).replace(/^set:/, '')}” is not in this browser; upload it again to use this preset's list.`, 'warn'); continue; }
