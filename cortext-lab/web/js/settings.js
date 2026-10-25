@@ -30,6 +30,9 @@ export const DEFAULT_SETTINGS = {
   predictor_mode: 'mock',          // off | mock | ws
   predictor_url: 'ws://localhost:8765',
   show_bars: false,                // live score bars under tiles (flash mode, demo only)
+  use_plan: false,                 // true: run the question list from the Experiment tab instead of generating questions
+  shuffle_on_start: false,         // reshuffle the question list (order and images) every time a session starts
+  order_mode: 'random',            // random | fixed: in a custom list, shuffle option order per trial or keep the listed order
   seed: null,
 };
 
@@ -60,3 +63,18 @@ export function estimateDurations(s) {
   const trialSec = flashSec + s.prompt_ms / 1000 + 6; // + ~6 s for response/review
   return { flashes, flashSec, trialSec, totalMin: (trialSec * s.n_trials) / 60 };
 }
+
+/** Save only some keys, keeping everything else as it is (Setup and Experiment each own part of the settings). */
+export function patchSettings(partial) { saveSettings({ ...loadSettings(), ...partial }); }
+
+const PARTICIPANT_KEY = 'cortext-lab.last-participant';
+/** Who is being recorded and with what: filled in on the Setup tab, read when an experiment starts. */
+export function loadParticipant() {
+  try { return { participant: '', device: '', notes: '', ...JSON.parse(localStorage.getItem(PARTICIPANT_KEY) || '{}') }; } catch { return { participant: '', device: '', notes: '' }; }
+}
+export function saveParticipant(p) { try { localStorage.setItem(PARTICIPANT_KEY, JSON.stringify(p)); } catch { /* ignore */ } }
+
+const PLAN_KEY = 'cortext-lab.plan.v1';
+/** The custom question list being edited on the Experiment tab: [{ prompt, target, options: [item ids in display order] }]. */
+export function loadPlan() { try { const p = JSON.parse(localStorage.getItem(PLAN_KEY) || '[]'); return Array.isArray(p) ? p : []; } catch { return []; } }
+export function savePlan(plan) { try { localStorage.setItem(PLAN_KEY, JSON.stringify(plan)); } catch { /* ignore */ } }

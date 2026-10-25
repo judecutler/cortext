@@ -11,7 +11,7 @@ const noFocus = { tabindex: '-1', onmousedown: (e) => e.preventDefault() };
 
 export function renderRun(root, app) {
   const pending = app.pending;
-  if (!pending) { location.hash = '#/setup'; return; }
+  if (!pending) { location.hash = '#/experiment'; return; }
   app.pending = null;
   const { session, settings, stimuli, specs } = pending;
   const predictor = new Predictor({ mode: settings.predictor_mode, url: settings.predictor_url });
@@ -35,14 +35,27 @@ export function renderRun(root, app) {
   const ctrl = h('div', { class: 'ctrls' },
     h('button', { class: 'btn small', id: 'pauseBtn', ...noFocus, onclick: () => runner.togglePause() }, 'Pause ', h('kbd', {}, 'P')),
     h('button', { class: 'btn small', ...noFocus, onclick: () => app.toggleMode() }, 'Demo view ', h('kbd', {}, 'M')),
+    h('button', { class: 'btn small', ...noFocus, onclick: () => setPanel(false) }, 'Hide panel ', h('kbd', {}, 'I')),
     h('button', { class: 'btn small', ...noFocus, onclick: () => runner.stop() }, 'End session'),
     h('a', { class: 'btn small', href: `#/review/${session.session_id}`, target: '_blank', rel: 'noopener' }, 'Review table ↗'));
   const dev = h('aside', { class: 'dev' },
     h('div', { class: 'card' }, h('h3', {}, 'Controls'), ctrl,
-      h('div', { class: 'kbdhelp', style: { marginTop: '6px' } }, 'Space/Enter next · Backspace discard · R redo · 1–4 / A–D choose · P pause · M mode · Shift+F fullscreen · Shift+B bars')),
+      h('div', { class: 'kbdhelp', style: { marginTop: '6px' } }, 'Space/Enter next · Backspace discard · R redo · 1–4 / A–D choose · P pause · M mode · I panel · Shift+F fullscreen · Shift+B bars')),
     mkSec('conn', 'Connections'), mkSec('eeg', 'EEG headset'), mkSec('sess', 'Session'), mkSec('count', 'Valid trials & repeats per class'),
     mkSec('timing', 'Timing'), mkSec('list', 'Trials'), mkSec('log', 'Marker log'));
-  root.append(h('div', { class: 'run' }, stage, dev), pdEl);
+  // The info panel can be hidden (keeps the top navigation, unlike Demo view). Remembered per browser.
+  const runEl = h('div', { class: 'run' }, stage, dev);
+  const showPanelBtn = h('button', { class: 'btn small panel-reveal', type: 'button', title: 'Show the info panel (I)', ...noFocus, onclick: () => setPanel(true) }, 'Show panel ', h('kbd', {}, 'I'));
+  let panelOpen = true;
+  try { panelOpen = localStorage.getItem('cortext-lab.run.panel') !== 'hidden'; } catch { /* storage unavailable */ }
+  function setPanel(open) {
+    panelOpen = open;
+    runEl.classList.toggle('nopanel', !open);
+    try { localStorage.setItem('cortext-lab.run.panel', open ? 'shown' : 'hidden'); } catch { /* ignore */ }
+    if (open) renderDev();
+  }
+  runEl.classList.toggle('nopanel', !panelOpen);
+  root.append(runEl, showPanelBtn, pdEl);
 
   // ---------- stage API used by trial types ----------
   const tileEls = {};
@@ -285,7 +298,7 @@ export function renderRun(root, app) {
   const eegMap = new HeadMap(eegCanvas, { compact: true });
   const feed = new EEGFeed({ traceSeconds: 2, traceMs: 700, erpMs: 60000 }).start();
   feed.on(() => {
-    if (app.mode === 'demo') return;
+    if (app.mode === 'demo' || !panelOpen) return;
     const tr = feed.trace;
     eegMap.draw(mapValues('signal', tr, null) || {}, { quality: tr?.quality, range: [0, 50] });
     const q = tr?.quality || [];
@@ -311,6 +324,7 @@ export function renderRun(root, app) {
     else if (k === 'r' || k === 'R') runner.redo();
     else if (k === 'p' || k === 'P') runner.togglePause();
     else if (k === 'm' || k === 'M') app.toggleMode();
+    else if (k === 'i' || k === 'I') setPanel(!panelOpen);
     else if (k === 'F') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.(); }
     else if (k === 'B') { settings.show_bars = !settings.show_bars; stage.classList.toggle('show-bars', settings.show_bars); }
     else if (trial) {

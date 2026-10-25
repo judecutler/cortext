@@ -4,3 +4,11 @@ __pycache__/
 .DS_Store
 .ipynb_checkpoints/
 data/
+
+# recorded data lives in the Hugging Face dataset, not git (see docs/DATA_STORAGE.md)
+datasets/cortext-p300/sessions/
+datasets/cortext-p300/simulated/
+datasets/cortext-p300/index.csv
+datasets/cortext-p300/sync_state.json
+legacy/psychopy_p300/data/
+cortext-lab/bridge/logs/

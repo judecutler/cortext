@@ -1,10 +1,11 @@
-// Post-hoc review: mark any trial invalid (with a reason) or restore it. Nothing is ever deleted.
+// Post-hoc review: mark any trial invalid (with a reason) or restore it. Trials are never deleted (a whole session can be, from here or the Sessions page).
 import { h, fmt } from '../util.js';
 import { db } from '../db.js';
 import { applyValidity } from '../trial.js';
 import { loadSession, exportSessionZip } from '../exporter.js';
 import { INVALID_REASONS } from '../schema.js';
 import { buildDataset } from '../dataset.js';
+import { deleteSessionsFlow } from '../sessionActions.js';
 
 let rebuildTimer = null;
 
@@ -19,7 +20,8 @@ export async function renderReview(root, app, sessionId) {
       'Marking a trial invalid keeps all of its data (flash order, markers, click); only the flag changes.'),
     live ? h('p', { class: 'warn' }, 'This session is still running in this window. Use the dev panel there to change the CURRENT trial; changes made here to the trial in progress could be overwritten.') : null,
     h('div', {}, h('a', { class: 'btn', href: `#/summary/${sessionId}` }, 'Summary'), ' ',
-      h('button', { class: 'btn', onclick: () => exportSessionZip(sessionId) }, 'Export session (zip)')));
+      h('button', { class: 'btn', onclick: () => exportSessionZip(sessionId) }, 'Export session (zip)'), ' ',
+      h('button', { class: 'btn danger', onclick: async () => { if ((await deleteSessionsFlow(app, [sessionId])).length) location.hash = '#/sessions'; } }, 'Delete session…')));
 
   const tbody = h('tbody');
   const note = (t) => h('input', { type: 'text', value: t.invalid_note || '', placeholder: 'note', style: { width: '150px' }, onchange: (e) => update(t, t.valid ? 'valid' : t.invalid_reason, e.target.value) });

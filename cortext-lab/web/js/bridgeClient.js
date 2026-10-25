@@ -70,6 +70,9 @@ export class BridgeClient {
     this._send(this._hello);
   }
 
+  /** Forget the session announced with hello() (e.g. after the timing test) so a reconnect does not re-announce it. */
+  clearHello() { this._hello = null; }
+
   /** n ping-pong rounds; keep the min-RTT sample (NTP-style) and tell the bridge the offset. */
   async sync(n = 10) {
     let best = null;

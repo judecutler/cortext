@@ -4,7 +4,8 @@ import { SCHEMA_VERSION } from './schema.js';
 import { flashParamsFor } from './settings.js';
 
 export function makeTrialRecord({ sessionId, spec, trialId, attempt, rng, settings, byId, wallMs = Date.now() }) {
-  const positions = shuffle(spec.option_ids, rng);
+  const fixed = !!spec.fixed_order;   // a preset can fix the order: tile positions and the one-at-a-time sequence follow the list
+  const positions = fixed ? spec.option_ids.slice() : shuffle(spec.option_ids, rng);
   const options = positions.map((id, position) => {
     const it = byId[id];
     return {
@@ -15,7 +16,7 @@ export function makeTrialRecord({ sessionId, spec, trialId, attempt, rng, settin
   return {
     key: `${sessionId}:${trialId}`, schema_version: SCHEMA_VERSION,
     session_id: sessionId, trial_id: trialId, trial_index: spec.trial_index, attempt, type: spec.type,
-    prompt: spec.prompt, tile_content: spec.tile_content, options,
+    prompt: spec.prompt, tile_content: spec.tile_content, options, fixed_order: fixed,
     true_answer_id: spec.target_id, true_answer_category: byId[spec.target_id].category,
     clicked_answer_id: null, correct: null, rt_ms: null,
     flash_params: flashParamsFor(spec.type, settings),

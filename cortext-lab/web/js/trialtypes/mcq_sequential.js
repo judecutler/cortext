@@ -35,7 +35,7 @@ export const mcqSequential = {
       // ---- 2. options one at a time (question stays) ----
       const plan = makeFlashPlan({
         optionIds: trial.options.map((o) => o.id), repeats: s.seq_repeats, onMs: s.seq_on_ms,
-        offMinMs: s.seq_gap_ms, offMaxMs: s.seq_gap_ms, rng: ctx.rng,
+        offMinMs: s.seq_gap_ms, offMaxMs: s.seq_gap_ms, rng: ctx.rng, fixedOrder: !!trial.fixed_order,
       });
       trial.status = 'flashing';
       ctx.setPhase('flash');

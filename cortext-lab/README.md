@@ -35,7 +35,7 @@ Hotkeys (run view): `Space`/`Enter` next/start · `Backspace` discard · `R` red
 
 ## Live EEG, cleaning and the shared dataset
 
-See [`../DATA_COLLECTION.md`](../DATA_COLLECTION.md). In short:
+See [`../docs/DATA_COLLECTION.md`](../docs/DATA_COLLECTION.md) and [`../docs/DATA_STORAGE.md`](../docs/DATA_STORAGE.md). In short:
 - `eeg/stream_eeg.py` streams the g.tec headset (via gpype) to LSL; `eeg/fake_eeg.py` streams SIMULATED EEG for testing.
 - The bridge (`bridge/eeg_engine.py`) records it per session (`bridge/logs/eeg_<session>_*.csv`), reports per-electrode
   quality and band power, and runs a live P300 scorer on `ws://…/predict` (Predictor = "Live EEG").
@@ -43,12 +43,36 @@ See [`../DATA_COLLECTION.md`](../DATA_COLLECTION.md). In short:
   - After 5 valid trials and 30 target epochs it retrains a shrinkage-LDA on this session after each trial.
   - It never uses a trial's own labels before that trial has been predicted.
   - `--p300-model file.npz` loads a model trained with `pipeline/train_p300.py` instead.
-- At session end, `pipeline/build_session.py` cleans the EEG and writes `datasets/cortext-p300/sessions/<id>/`.
-  The summary page's "Publish to GitHub" button commits and pushes only that folder.
-- `#/brain` is the Neural monitor: scalp map, region band power, live traces, P300 waveform and answer evidence. It is
+- At session end, `pipeline/build_session.py` cleans the EEG and writes `data/cortext-p300/sessions/<id>/`
+  (git-ignored). Upload sends only that folder to the private Hugging Face dataset (button, or automatic from the Setup tab).
+- The **EEG** tab (`#/eeg`) is the neural monitor: scalp map, region band power, live traces, P300 waveform and answer evidence. It is
   for the audience on a second screen, never for the participant during flashing.
 - Each browser tab keeps its own clock offset in the bridge. Opening the monitor in a second tab must not (and no longer
   does) shift the session's marker timestamps.
+
+## Tabs
+
+| Tab | What it is for |
+|---|---|
+| **EEG** | Neural monitor: scalp map, band power, live traces, P300 waveform. Can open in its own window for a second screen. |
+| **Setup** | Headset check, participant ID, device, predictor, photodiode, and **data storage** (local folder, Hugging Face status, upload/download). |
+| **Timing** | The display/marker timing test, run inside the app (no new tab; it needs the same bridge connection). |
+| **Experiment** | Presets, stimulus set, design and timing, **question list**, then Start. Sub-page **Recorded sessions**: buckets, filters, bulk actions and real deletion. |
+
+## Presets, question wording and image order
+
+- A **preset** is a named bundle of the experiment settings plus an optional question list. Built-in presets are provided;
+  yours are saved in this browser and can be **exported/imported as a .json file** to share with teammates.
+  Setup-tab choices (headset, participant, predictor) are deliberately not part of a preset.
+- **Questions & image order** card: tick *Use this list for the session* and the app asks exactly those questions, with your
+  wording and images. Edit each question's text, the correct answer and the images (◀ ▶ reorder, ✕ remove, add more).
+  *Generate from stimulus set* fills the list; *Apply wording to all* uses a template such as `Which one is the {label}?`.
+- **Randomize**: *Shuffle questions*, *Shuffle images* (order inside each question), *Shuffle both*, a 🔀 per question, and
+  *Re-shuffle every time a session starts* so each participant gets a different pattern.
+- **Image order in each question**: *Random every trial* (default; avoids position effects) or *Exactly as listed*
+  (tile positions and the one-at-a-time sequence follow your order; position then correlates with the item, so use it
+  deliberately). The list used is stored in the session's settings (`question_plan`).
+- During a session, **Hide panel** (key `I`) hides the researcher info sidebar and keeps the top navigation.
 
 ## Presentation modes
 
@@ -84,7 +108,7 @@ question**; the click shows whether the person agreed with it, which is what mak
 4. **Post-trial**: optional correct/incorrect feedback, the predictor readout next to the click, then
    **Discard trial** (`Backspace`), **Redo this question** (`R`) or **Next** (`Space`).
 
-Cleaning: nothing is ever deleted. Discard/redo/tab-hidden/pause-mid-trial only flip `valid` to `false` and record a
+Cleaning: trials are never deleted by accident. Discard/redo/tab-hidden/pause-mid-trial only flip `valid` to `false` and record a
 reason in `validity_log` (misclick, blink or movement, distracted, equipment glitch, other, plus automatic ones:
 `redo`, `paused`, `tab_hidden`, `no_response`, `aborted`, `unspecified`). The review page (`#/review/<session>`)
 lets you change any trial's validity afterwards; every change is appended to the log. *Redo* re-queues the same
@@ -135,7 +159,7 @@ The marker is taken **in the frame callback where the highlight class is applied
 paints that frame. The photons appear later: roughly one frame of compositing plus the monitor's own latency
 (typically 10–50 ms, constant per setup). Flash onsets are also quantised to display frames (16.7 ms at 60 Hz). So:
 expect a constant lag of tens of ms and a jitter of about one frame. Measure the constant with a photodiode
-(`timing.html`, `TIMING_CHECKLIST.md`) and correct for it in analysis; do not assume it is zero.
+(the **Timing** tab, `TIMING_CHECKLIST.md`) and correct for it in analysis; do not assume it is zero.
 
 ## Data
 
@@ -228,7 +252,7 @@ Setup → Predictor: `off`, `mock`, or `ws` (default `ws://localhost:8765`).
 
 ```
 bridge/    bridge.py (HTTP + WebSocket + LSL + CSV), wsproto.py (RFC 6455 helpers), logs/ (git-ignored)
-web/       index.html, timing.html, css/, js/ (app, session, trialtypes/, views/, flasher, markers, db, stimulusSets, …),
+web/       index.html (timing.html just redirects to the Timing tab), css/, js/ (app, session, trialtypes/, views/, flasher, markers, db, stimulusSets, …),
            config/stimuli.json, stimuli/*.svg
 tools/     analyze_timing.py, mock_predictor_server.py
 tests/     logic.test.mjs, test_bridge.py, test_bridge_lsl.py, e2e*.py       (see TEST_PLAN.md)

@@ -49,7 +49,7 @@ def main():
             page = browser.new_page(viewport={"width": 1600, "height": 950})
             page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
             page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" and "ERR_TUNNEL" not in m.text and "fonts.g" not in m.text else None)
-            page.goto(BASE + "/")
+            page.goto(BASE + "/#/setup")
             page.wait_for_selector("text=Auto-filled", timeout=15000)
             assert field(page, "Device used").locator("select").evaluate("s => s.value") == "Simulated EEG (fake_eeg.py)"
             assert field(page, "Predictor").locator("select").evaluate("s => s.value") == "eeg"
@@ -61,7 +61,7 @@ def main():
 
             # ---- neural monitor in a second tab ----
             mon = browser.new_page(viewport={"width": 1600, "height": 1000})
-            mon.goto(BASE + "/#/brain")
+            mon.goto(BASE + "/#/eeg")
             mon.wait_for_selector(".live-pill.sim", timeout=10000)
             time.sleep(1.5)
             # the map canvas must actually have painted pixels
@@ -74,6 +74,8 @@ def main():
 
             # ---- a short session with live EEG predictions ----
             page.fill("input[placeholder='e.g. P01']", "SIMTEST")
+            page.click("#topbar nav a[data-nav=experiment]")
+            page.wait_for_selector("h1:text-is('Experiment')")
             set_num(page, "Questions", 7)
             set_num(page, "Repeats per option", 5)
             set_num(page, "Flash on (ms)", 150)

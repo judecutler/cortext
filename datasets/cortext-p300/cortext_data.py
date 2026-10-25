@@ -1,4 +1,12 @@
-"""Load the CorText P300 dataset (this folder) for model training.
+"""Load the CorText P300 dataset for model training.
+
+The recordings are NOT in git. They live in a private Hugging Face dataset and in your local copy, data/cortext-p300/
+(see docs/DATA_STORAGE.md). Download them first:
+
+    python datasets/cortext-p300/cortext_store.py pull            # epochs only (small, enough to train)
+    python datasets/cortext-p300/cortext_store.py pull --all      # also the continuous clean + raw EEG
+
+then:
 
     import sys; sys.path.append("datasets/cortext-p300")      # path from the repo root
     from cortext_data import load_epochs, list_sessions
@@ -16,22 +24,23 @@ Only numpy is required. Simulated sessions (fake_eeg.py) are excluded unless inc
 import csv
 import json
 import os
+import sys
+import warnings
 
 import numpy as np
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cortext_store as store  # noqa: E402
+from cortext_store import pull, data_root  # noqa: E402,F401  (re-exported: `from cortext_data import pull`)
+
+ROOT = str(data_root())   # this machine's copy; override with the CORTEXT_DATA_DIR environment variable
 PER_EPOCH = ["y", "trial_id", "trial_index", "option_id", "option_position", "category", "repeat_index", "flash_index",
              "mode", "trial_valid", "rejected_artifact", "clicked_option_id", "onset_lsl", "session_id"]
 
 
 def list_sessions(root=ROOT, include_simulated=False):
-    """Rows of index.csv (one per session) as dicts."""
-    path = os.path.join(root, "index.csv")
-    if not os.path.exists(path):
-        return []
-    with open(path, newline="", encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
-    return [r for r in rows if include_simulated or r.get("simulated") not in ("True", "true", "1")]
+    """One dict per local session (read from the meta.json files, so it is never out of date)."""
+    return [r for r in store.scan_local(root) if include_simulated or not r["simulated"]]
 
 
 def session_meta(session, root=ROOT):
@@ -42,18 +51,23 @@ def _folder(session, root):
     for r in list_sessions(root, include_simulated=True):
         if r["session_id"] == session or r["folder"] == session:
             return os.path.join(root, r["folder"])
-    raise KeyError(f"session {session} not in {root}/index.csv")
+    raise KeyError(f"session {session} is not in {root}. Download it with: python datasets/cortext-p300/cortext_store.py pull")
 
 
 def load_epochs(sessions=None, root=ROOT, valid_only=True, drop_rejected=True, channels=None, tmin=None, tmax=None,
-                include_simulated=False, mode=None):
+                include_simulated=False, mode=None, bucket=None):
     """Concatenate epochs from several sessions.
 
     sessions: list of session ids (default: all real sessions). channels: list of names to keep (in that order).
     valid_only: drop trials the operator marked invalid. drop_rejected: drop epochs flagged as artifacts.
     mode: "flash" or "sequential" to keep one presentation mode only.
+    bucket: only sessions labelled with this bucket in the app (e.g. "train" or "test"); a list of buckets also works.
     """
     rows = list_sessions(root, include_simulated)
+    nothing_downloaded = not rows
+    if bucket is not None:
+        want = {bucket} if isinstance(bucket, str) else set(bucket)
+        rows = [r for r in rows if r.get("bucket") in want]
     if sessions is not None:
         rows = [r for r in rows if r["session_id"] in sessions]
     Xs, cols, labels, times = [], {k: [] for k in PER_EPOCH}, None, None
@@ -91,6 +105,8 @@ def load_epochs(sessions=None, root=ROOT, valid_only=True, drop_rejected=True, c
         for k in PER_EPOCH:
             cols[k].append(z[k][m])
     if not Xs:
+        if nothing_downloaded:
+            warnings.warn(f"No sessions found in {root}. Download them with: python datasets/cortext-p300/cortext_store.py pull", stacklevel=2)
         return np.zeros((0, 0, 0), np.float32), np.zeros(0, np.int8), {"labels": [], "times": np.zeros(0), "groups": np.array([])}
     info = {k: np.concatenate(v) for k, v in cols.items()}
     y = info.pop("y")
@@ -101,7 +117,12 @@ def load_epochs(sessions=None, root=ROOT, valid_only=True, drop_rejected=True, c
 
 def load_continuous(session, root=ROOT, clean=True):
     """(data: channels x samples in uV, times: LSL seconds, labels, srate) for one session."""
-    z = np.load(os.path.join(_folder(session, root), "eeg_clean.npz" if clean else "eeg_raw.npz"), allow_pickle=False)
+    name = "eeg_clean.npz" if clean else "eeg_raw.npz"
+    path = os.path.join(_folder(session, root), name)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{name} is not on this machine (sessions are downloaded as epochs only by default). "
+                                "Run: python datasets/cortext-p300/cortext_store.py pull --all")
+    z = np.load(path, allow_pickle=False)
     return z["data"], z["times"], [str(l) for l in z["labels"]], float(z["srate"])
 
 

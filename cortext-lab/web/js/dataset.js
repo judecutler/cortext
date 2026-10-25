@@ -1,9 +1,13 @@
-// Talks to the bridge's dataset pipeline (pipeline/build_session.py): build the clean, shareable copy of a session
-// in datasets/cortext-p300/ and optionally git-push it so teammates can pull it and train.
+// Talks to the bridge: build the clean dataset entry of a session (pipeline/build_session.py), upload it to the
+// Hugging Face dataset repo, list / delete / label what the bridge holds, and manage storage.
 import { loadSession } from './exporter.js';
 
-async function post(path, body) {
+async function post(path, body = {}) {
   const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  return r.json();
+}
+async function get(path) {
+  const r = await fetch(path, { cache: 'no-store' });
   return r.json();
 }
 
@@ -26,8 +30,15 @@ async function payload(sessionId) {
 }
 
 export async function buildDataset(sessionId) { return post('/api/dataset/build', await payload(sessionId)); }
+/** Build (if needed) and upload to Hugging Face. */
 export async function pushDataset(sessionId) { return post('/api/dataset/push', await payload(sessionId)); }
-export async function datasetStatus(sessionId) {
-  const r = await fetch(`/api/dataset?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' });
-  return r.json();
-}
+export async function datasetStatus(sessionId) { return get(`/api/dataset?session_id=${encodeURIComponent(sessionId)}`); }
+
+// ---- what the bridge machine holds (dataset folders + raw logs), deletion, buckets, storage ----
+export const bridgeSessions = () => get('/api/sessions');
+export const deleteOnBridge = (sessionId, { remote = false, purge_remote = true } = {}) => post('/api/session/delete', { session_id: sessionId, remote, purge_remote });
+export const setBucket = (sessionId, bucket) => post('/api/session/bucket', { session_id: sessionId, bucket });
+export const storageInfo = (check = false) => get(`/api/storage${check ? '?check=1' : ''}`);
+export const uploadPending = () => post('/api/storage/push-pending');
+export const downloadFromHub = (profile = 'epochs') => post('/api/storage/pull', { profile });
+export const createHubRepo = () => post('/api/storage/init');

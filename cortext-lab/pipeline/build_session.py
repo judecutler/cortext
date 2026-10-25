@@ -5,18 +5,18 @@
     python cortext-lab/pipeline/build_session.py --all                   # every session found in the logs
 
 The bridge runs this automatically when a session ends (and again when the app sends its cleaned trial table), so
-normally you never call it by hand. Output (see datasets/cortext-p300/README.md):
+normally you never call it by hand. Output (see datasets/cortext-p300/README.md and docs/DATA_STORAGE.md):
 
-    datasets/cortext-p300/sessions/<session_id>/
+    data/cortext-p300/sessions/<session_id>/        (git-ignored; shared through Hugging Face, not GitHub)
         meta.json        who/what/when, stream info, every processing parameter, quality report
         eeg_clean.npz    noise-reduced continuous EEG  (data: channels x samples, microvolts, float32; times: LSL s)
         eeg_raw.npz      the untouched recording (so anyone can redo the cleaning differently)
         epochs.npz       ready to train: X (n, channels, time), y (1 = flash of the attended answer), trial ids, ...
         events.csv       every marker, with its LSL time and sample index into eeg_clean
         trials.csv       one row per trial attempt from the app (validity, click, correct, model output)
-    datasets/cortext-p300/index.csv  one row per session
+    data/cortext-p300/index.csv  one row per session (rebuilt automatically)
 
-Simulated sessions (fake_eeg.py) go to datasets/cortext-p300/simulated/ instead, so they never mix with real data.
+Simulated sessions (fake_eeg.py) go to data/cortext-p300/simulated/ instead, so they never mix with real data.
 
 Noise reduction (automatic, zero-phase because this is offline):
   1. split at gaps in the Bluetooth stream (> 0.1 s) and put each piece on an exact 250 Hz grid
@@ -32,7 +32,6 @@ import glob
 import json
 import os
 import shutil
-import subprocess
 import sys
 import time
 
@@ -43,6 +42,9 @@ PIPELINE_VERSION = "1.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 LAB = os.path.dirname(HERE)
 LOG_DIR = os.path.join(LAB, "bridge", "logs")
+
+sys.path.insert(0, os.path.join(os.path.dirname(LAB), "datasets", "cortext-p300"))
+import cortext_store as store  # noqa: E402  (where sessions live and how they are shared)
 
 PARAMS = {
     "gap_split_s": 0.1, "min_segment_s": 3.0,
@@ -63,18 +65,9 @@ POS = {"Fp1": (-.3, .95), "Fp2": (.3, .95), "AF3": (-.25, .75), "AF4": (.25, .75
        "AF7": (-.55, .8), "AF8": (.55, .8)}
 
 
-def repo_root():
-    try:
-        out = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=LAB, capture_output=True, text=True, timeout=5)
-        if out.returncode == 0 and out.stdout.strip():
-            return out.stdout.strip()
-    except Exception:
-        pass
-    return os.path.dirname(LAB)
-
-
 def dataset_root():
-    return os.environ.get("CORTEXT_DATASET_DIR") or os.path.join(repo_root(), "datasets", "cortext-p300")
+    """This machine's copy of the dataset (data/cortext-p300 by default; the CORTEXT_DATA_DIR environment variable overrides)."""
+    return str(store.data_root(create=True))
 
 
 def _safe(sid):
@@ -358,7 +351,7 @@ def build(session_id, trials=None, session=None, out_root=None, log_dir=LOG_DIR,
     meta = {
         "session_id": session_id, "dataset": "cortext-p300", "pipeline_version": PIPELINE_VERSION,
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "simulated": simulated,
-        "participant_id": (session or {}).get("participant_id"), "device": (session or {}).get("device"),
+        "bucket": (session or {}).get("bucket") or "", "participant_id": (session or {}).get("participant_id"), "device": (session or {}).get("device"),
         "created_at": (session or {}).get("created_at"), "notes": (session or {}).get("notes"),
         "stream": stream_info or (session or {}).get("eeg"), "labels": labels, "srate": srate, "units": "uV",
         "settings": (session or {}).get("settings"), "processing": PARAMS, "quality": report,
@@ -370,8 +363,8 @@ def build(session_id, trials=None, session=None, out_root=None, log_dir=LOG_DIR,
         json.dump(meta, fh, indent=2, default=str)
     shutil.rmtree(out, ignore_errors=True)
     os.replace(tmp, out)
-    update_index(root)
-    return {"path": out, "relative_path": os.path.relpath(out, repo_root()), "simulated": simulated, "quality": report}
+    store.rebuild_index(root)
+    return {"path": out, "relative_path": store.display_path(out), "session_id": session_id, "simulated": simulated, "quality": report}
 
 
 def quality_verdict(r, labels):
@@ -387,60 +380,14 @@ def quality_verdict(r, labels):
     return {"ok": not msgs, "messages": msgs or ["looks usable"]}
 
 
-def update_index(root):
-    rows = []
-    for sub in ("sessions", "simulated"):
-        for mf in sorted(glob.glob(os.path.join(root, sub, "*", "meta.json"))):
-            try:
-                m = json.load(open(mf, encoding="utf-8"))
-            except Exception:
-                continue
-            q = m.get("quality", {})
-            rows.append({"session_id": m["session_id"], "folder": f"{sub}/{os.path.basename(os.path.dirname(mf))}",
-                         "simulated": m.get("simulated"), "participant_id": m.get("participant_id"),
-                         "device": m.get("device"), "recorded": m.get("created_at"), "duration_s": q.get("duration_s"),
-                         "trials_valid": q.get("trials_valid"), "epochs_usable": q.get("epochs_usable"),
-                         "epochs_total": q.get("epochs_total"), "bad_channels": ";".join(q.get("bad_channels", {})),
-                         "artifact_fraction": q.get("artifact_fraction"), "pipeline_version": m.get("pipeline_version")})
-    os.makedirs(root, exist_ok=True)
-    with open(os.path.join(root, "index.csv"), "w", newline="", encoding="utf-8") as fh:
-        keys = ["session_id", "folder", "simulated", "participant_id", "device", "recorded", "duration_s", "trials_valid",
-                "epochs_usable", "epochs_total", "bad_channels", "artifact_fraction", "pipeline_version"]
-        w = csv.DictWriter(fh, fieldnames=keys)
-        w.writeheader()
-        w.writerows(rows)
-
-
-def git_publish(result, message=None):
-    """git add/commit/pull --rebase/push ONLY the dataset folder of this session (+ index.csv)."""
-    root = repo_root()
-    folder = result["relative_path"]
-    index = os.path.relpath(os.path.join(os.path.dirname(os.path.dirname(result["path"])), "index.csv"), root)
-    log = []
-
-    def run(*cmd):
-        p = subprocess.run(["git", *cmd], cwd=root, capture_output=True, text=True, timeout=120)
-        log.append(f"$ git {' '.join(cmd)}\n{(p.stdout + p.stderr).strip()}")
-        return p.returncode
-    if run("add", "--", folder, index) != 0:
-        return False, "\n".join(log)
-    if run("diff", "--cached", "--quiet") == 0:
-        return True, "\n".join(log + ["nothing new to publish (already pushed)"])
-    run("commit", "-m", message or f"data: add session {os.path.basename(folder)}", "--", folder, index)
-    if run("pull", "--rebase", "--autostash") != 0:
-        return False, "\n".join(log + ["pull failed: resolve in VS Code (Source Control), then press Publish again"])
-    ok = run("push") == 0
-    return ok, "\n".join(log)
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("session_id", nargs="?")
     ap.add_argument("--all", action="store_true", help="build every session found in the bridge logs")
     ap.add_argument("--logs", default=LOG_DIR)
-    ap.add_argument("--out", default=None, help="dataset folder (default: <repo>/datasets/cortext-p300)")
+    ap.add_argument("--out", default=None, help="dataset folder (default: <repo>/data/cortext-p300)")
     ap.add_argument("--no-raw", action="store_true", help="don't include the raw recording")
-    ap.add_argument("--push", action="store_true", help="git commit + push the result")
+    ap.add_argument("--push", action="store_true", help="upload the result to the Hugging Face dataset repo")
     a = ap.parse_args()
     ids = all_logged_sessions(a.logs) if a.all else [a.session_id]
     if not ids or ids == [None]:
@@ -455,9 +402,10 @@ def main():
         print(f"{sid}: {r['relative_path']}  {q['epochs_usable']}/{q['epochs_total']} usable epochs, "
               f"{q['trials_valid']} valid trials. {'; '.join(q['verdict']['messages'])}")
         if a.push:
-            ok, log = git_publish(r)
-            print(log)
-            print("pushed" if ok else "PUSH FAILED")
+            try:
+                print("uploaded:", store.push_session(sid, root=a.out, allow_simulated=r["simulated"])["url"])
+            except store.StorageError as exc:
+                print(f"UPLOAD FAILED: {exc}")
 
 
 if __name__ == "__main__":

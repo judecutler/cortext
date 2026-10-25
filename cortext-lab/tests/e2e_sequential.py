@@ -15,7 +15,7 @@ import zipfile
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from pw_helpers import set_num, set_select  # noqa: E402
+from pw_helpers import set_num, set_select, set_participant  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 9100 + os.getpid() % 90
@@ -66,14 +66,14 @@ def main():
             page = browser.new_page(viewport={"width": 1500, "height": 900})
             page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
             page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" and "ERR_TUNNEL" not in m.text and "ERR_NAME" not in m.text else None)
-            page.goto(BASE + "/")
+            set_participant(page, BASE, "SEQ")
             page.wait_for_selector("text=12 items in 3 categories")
 
             # ---- upload a folder ----
             page.locator("input[webkitdirectory]").set_input_files(folder)
             page.wait_for_selector("text=Saved \"pets\"")
             page.wait_for_selector("text=5 items in 2 categories (animals, objects)")
-            assert page.locator("select >> nth=2").evaluate("s => s.value") == "set:pets" or "set:pets" in page.inner_text(".card")
+            assert page.locator(".field:has(label:text-is('Use')) select").evaluate("s => s.value") == "set:pets"
             # ---- upload config + images (one image deliberately missing) ----
             page.fill("input[placeholder='name for this set (optional)']", "cfgset")
             page.locator("input[type=file]:not([webkitdirectory])").set_input_files(
@@ -85,7 +85,7 @@ def main():
 
             # ---- reload: uploaded sets persist and can be re-selected ----
             page.reload()
-            page.wait_for_selector("text=New session")
+            page.wait_for_selector("h1:text-is('Experiment')")
             opts = page.locator(".field:has(label:text-is('Use')) select option").all_inner_texts()
             assert any("Uploaded: pets (5 items)" in o for o in opts) and any("Uploaded: cfgset (4 items)" in o for o in opts), opts
             page.locator(".field:has(label:text-is('Use')) select").select_option("set:pets")
@@ -94,7 +94,6 @@ def main():
             # ---- configure the sequential mode ----
             set_select(page, "Presentation mode", "mcq_sequential")
             assert page.locator("text=Flash timing (flash mode)").is_hidden() and page.locator("text=One-at-a-time timing").is_visible()
-            page.fill("input[placeholder='e.g. P01']", "SEQ")
             for label, val in {"Questions": "2", "Options per question": "4", "Prompt shown first (ms)": "500",
                                "Each option on screen (ms)": "300", "Gap between options (ms)": "150", "Times each option is shown": "2"}.items():
                 set_num(page, label, val)

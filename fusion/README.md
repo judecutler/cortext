@@ -80,7 +80,7 @@ It prints the file's shape, dtype, range and NaN count, checks your trial ids ag
 - a model that adds no information
 - accuracy **below** chance, which usually means a flipped sign or the wrong option order
 
-### From the starter notebook (`p300_model.ipynb`)
+### From the starter notebook (`notebooks/p300_model.ipynb`)
 
 `find_p300_peak(erp, times)` returns the peak amplitude of an averaged ERP. Average each option's `flash_on` epochs, take the amplitude, and save the result:
 

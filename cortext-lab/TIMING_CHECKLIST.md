@@ -10,7 +10,7 @@ Use the **same** computer, display, resolution, browser window/fullscreen state 
       "motion smoothing", adaptive/variable refresh and night-light features.
 - [ ] `python bridge/bridge.py` running; page shows bridge **connected** (LSL on if you will record markers).
 
-## 1. Software timing (2 minutes) — `Timing test` page
+## 1. Software timing (2 minutes) — **Timing** tab
 Interval 1000 ms, duration 500 ms, 60 flashes, photodiode square on.
 - [ ] Display refresh matches the monitor (e.g. 59.9–60.1 Hz).
 - [ ] **Max onset error ≤ 1.5 frames** (≤ 25 ms at 60 Hz) — PASS shown.

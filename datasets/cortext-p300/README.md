@@ -2,8 +2,9 @@
 
 EEG recorded with CorText Lab (multiple-choice P300 task; mostly a g.tec Unicorn / BCI Core-8, 8 channels
 Fz C3 Cz C4 Pz PO7 POz PO8, 250 Hz). The pipeline (`cortext-lab/pipeline/build_session.py`) adds sessions here
-automatically, and the app's **Publish to GitHub** button pushes them. How to record: see `DATA_COLLECTION.md` in the
-repo root.
+automatically. **The recordings are not in git**: they live in a private Hugging Face dataset and in `data/cortext-p300/`
+on each machine. Get them with `python datasets/cortext-p300/cortext_store.py pull`; setup and storage decisions are in
+`docs/DATA_STORAGE.md`, how to record in `docs/DATA_COLLECTION.md`.
 
 ## Load it
 
@@ -11,6 +12,7 @@ repo root.
 import sys; sys.path.append("datasets/cortext-p300")
 from cortext_data import load_epochs, list_sessions, load_continuous, to_mne
 X, y, info = load_epochs()                       # real sessions, valid trials, artifact-free epochs
+X, y, info = load_epochs(bucket="final")         # only sessions labelled with that bucket
 X, y, info = load_epochs(channels=["Pz", "POz", "Cz"], tmin=0.0, tmax=0.8)
 epochs = to_mne(X, info, y)                      # MNE EpochsArray (event 1 = target)
 ```
@@ -19,10 +21,10 @@ epochs = to_mne(X, info, y)                      # MNE EpochsArray (event 1 = ta
 trial never sit in both train and test. Report answer accuracy per trial (`trial_option_scores`) against chance
 (1 / number of options). Also run a shuffled-label control. `cortext-lab/pipeline/train_p300.py` does all of this.
 
-## Layout
+## Layout (under `data/cortext-p300/`, or `$CORTEXT_DATA_DIR`)
 
 ```
-index.csv                      one row per session (quality summary)
+index.csv                      one row per local session (quality summary; rebuilt automatically)
 sessions/<session_id>/         real recordings
 simulated/<session_id>/        fake_eeg.py runs (never mix into results)
   meta.json      participant code, device, stream, settings, every cleaning parameter, quality report
@@ -43,7 +45,7 @@ simulated/<session_id>/        fake_eeg.py runs (never mix into results)
 4. Flat or noisy electrodes detected and rebuilt from their neighbours.
 5. Artifact spans (> 150 µV) flagged; epochs touching them get `rejected_artifact`.
 
-The details and the reasons for each step are in `DATA_COLLECTION.md` and in each session's `meta.json["processing"]`.
+The details and the reasons for each step are in `docs/DATA_COLLECTION.md` and in each session's `meta.json["processing"]`.
 
 ## Caveats
 
