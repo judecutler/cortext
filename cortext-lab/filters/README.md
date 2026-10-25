@@ -36,6 +36,9 @@ artifact limit: an epoch whose filtered signal goes beyond ± this is skipped.
   falls back to calibrating on the session. Models saved before chains existed count as the default chain.
 - Picking a model on the Agent page switches the filters to its chain. Applying a different chain rebuilds the
   session's live calibration from the last 90 s of EEG (re-filtered).
+- **Artifact threshold and forehead channels:** `reject_uv` applies to every channel except Fp*/AF* when the headset
+  has others (a Muse's AF7/AF8 see every blink; its P300 channels are TP9/TP10). The Unicorn has none, so nothing changes there.
+- `library/muse-p300.json` is the chain for the Muse (60 Hz notch + 0.5–20 Hz, 150 µV); the Muse p3000 function is built for it.
 - To compare chains honestly, train one model per chain on the same sessions
   (`train_p300.py --filters p300-60-hz-notch`) and compare held-out accuracy and the shuffled control.
 

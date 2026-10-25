@@ -17,7 +17,7 @@ export const POS = {
 export const REGIONS = [
   { name: 'Frontal', role: 'attention · control', y: 0.62, ch: ['Fz', 'F3', 'F4', 'Fp1', 'Fp2', 'AF3', 'AF4', 'AF7', 'AF8', 'FCz'] },
   { name: 'Central', role: 'sensorimotor', y: 0.16, ch: ['C3', 'Cz', 'C4', 'FC1', 'FC2', 'CP1', 'CP2'] },
-  { name: 'Parietal', role: 'P300 · attention', y: -0.36, ch: ['Pz', 'P3', 'P4', 'CPz', 'P7', 'P8'] },
+  { name: 'Parietal', role: 'P300 · attention', y: -0.36, ch: ['Pz', 'P3', 'P4', 'CPz', 'P7', 'P8', 'TP9', 'TP10'] },   // TP9/TP10: the Muse's P300 sites
   { name: 'Occipital', role: 'vision', y: -0.88, ch: ['PO7', 'POz', 'PO8', 'O1', 'Oz', 'O2', 'PO3', 'PO4'] },
 ];
 

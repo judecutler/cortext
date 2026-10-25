@@ -44,10 +44,37 @@ calibrated model in Agent → Model when you have one. Start is refused (with a 
 the bridge; for testing without a headset run `eeg/fake_eeg.py`, or choose Mock on the Agent tab. "Reset design" on the
 Experiment tab returns the design to these values (predictor and narrator are on the Agent tab). `tests/e2e_showtime.py` runs exactly this flow from a fresh browser.
 
+## Demo with a Muse headband instead of the 8-channel headset
+
+```bash
+pip install muselsl pylsl numpy scipy        # once
+python eeg/stream_muse.py                    # turn the Muse on first; leave this running
+python bridge/bridge.py                      # then open http://localhost:8000 as usual
+```
+Nothing else changes: same app, same demo flow, same keys. What is Muse-specific:
+- **Streamer.** `eeg/stream_muse.py` (muselsl, Bluetooth LE, no dongle) streams TP9 AF7 AF8 TP10 at 256 Hz with
+  **LSL timestamps** (plain `muselsl stream` uses wall-clock time unless you add `--lsltime`; the bridge detects that
+  and corrects it, and says so in its log). BlueMuse on Windows works too. The Mind Monitor app does not (OSC, not LSL).
+  Close the Muse phone app first: only one program can hold the headband.
+- **Channels.** The bridge drops the unconnected "Right AUX" input, so the Experiment tab shows 4 chips.
+- **Decoder.** `models/library/p3000_function_muse.npz`: the same no-training spike detector, reading TP9/TP10 (where a
+  Muse sees the P300; its reference is Fpz) and ignoring the blink-heavy forehead channels. If the running model is
+  the 8-channel p3000 function (the default in `models/active/`), the bridge **switches to the Muse one by itself** when
+  a Muse connects, together with its filter chain. You can also pick it on Agent → Model.
+- **Filters.** "Muse P300" chain: 60 Hz notch + the usual 0.5–20 Hz band-pass, artifact threshold 150 µV (dry
+  sensors). Blinks on AF7/AF8 never reject an epoch (live, in training and in the offline dataset build).
+- **Fit.** Push the band down so TP9/TP10 sit on skin behind the ears (not hair) and the forehead sensors touch skin;
+  a drop of water on the sensors helps. Wait for 4 green chips (dry sensors can take 1–2 minutes).
+- **Expect less than the 8-channel headset.** A Muse has 2 usable P300 channels, so use more rounds per question
+  (4–5) if you can, and quote the rehearsal hit rate, not the simulation.
+- Test without a Muse: `python eeg/fake_eeg.py --muse` (add `--wall-clock` to mimic plain muselsl);
+  `tests/test_muse.py` and `tests/e2e_showtime.py --muse` run the whole Muse path.
+
 ## Live EEG, cleaning and the shared dataset
 
 See [`../docs/DATA_COLLECTION.md`](../docs/DATA_COLLECTION.md) and [`../docs/DATA_STORAGE.md`](../docs/DATA_STORAGE.md). In short:
-- `eeg/stream_eeg.py` streams the g.tec headset (via gpype) to LSL; `eeg/fake_eeg.py` streams SIMULATED EEG for testing.
+- `eeg/stream_eeg.py` streams the g.tec headset (via gpype) to LSL, `eeg/stream_muse.py` a Muse (see above);
+  `eeg/fake_eeg.py` streams SIMULATED EEG for testing (`--muse` for a simulated Muse).
 - The bridge (`bridge/eeg_engine.py`) records it per session (`bridge/logs/eeg_<session>_*.csv`), reports per-electrode
   quality and band power, and runs a live P300 scorer on `ws://…/predict` (Predictor = "Live EEG").
   - The scorer starts with an untrained heuristic (mean 250–450 ms amplitude over parietal channels).

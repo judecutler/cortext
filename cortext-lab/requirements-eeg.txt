@@ -3,4 +3,5 @@ pylsl>=1.16
 numpy>=1.24
 scipy>=1.10
 gpype[lsl]>=4.0   # g.tec headset driver used by eeg/stream_eeg.py (same package as bci.py)
+muselsl>=2.2       # Muse headband streamer used by eeg/stream_muse.py (only if you use a Muse)
 playwright        # tests only

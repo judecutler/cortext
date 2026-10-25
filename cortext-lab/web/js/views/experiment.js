@@ -433,7 +433,7 @@ export async function renderExperiment(root, app) {
     if (!stimuli) { err.textContent = 'The stimulus set could not be loaded.'; return; }
     if (cur.off_max_ms < cur.off_min_ms) { err.textContent = 'Gap max must be ≥ gap min.'; return; }
     if (cur.options_per_trial > stimuli.items.length) { err.textContent = 'More options per question than stimulus items.'; return; }
-    if (cur.predictor_mode === 'eeg' && !(app.bridge.status().eeg || {}).found) { err.replaceChildren('Predictor is Live EEG but no headset stream is reaching the bridge. Start eeg/stream_eeg.py, or choose Mock on the ', h('a', { href: '#/agent/output' }, 'Agent tab'), '.'); return; }
+    if (cur.predictor_mode === 'eeg' && !(app.bridge.status().eeg || {}).found) { err.replaceChildren('Predictor is Live EEG but no headset stream is reaching the bridge. Start eeg/stream_eeg.py (Unicorn) or eeg/stream_muse.py (Muse), or choose Mock on the ', h('a', { href: '#/agent/output' }, 'Agent tab'), '.'); return; }
     if (cur.trial_type === 'mcq_sequential' && cur.show_model_probs && cur.predictor_mode === 'off') { err.textContent = 'Model probabilities need a predictor: choose Mock or WebSocket, or untick "Show model probability".'; return; }
     if (cur.narrate !== 'off' && cur.predictor_mode === 'off') { err.replaceChildren('The narrator announces the model’s guess, so it needs a predictor: choose one on the ', h('a', { href: '#/agent/output' }, 'Agent tab'), ', or turn the narrator off.'); return; }
     try { await db.getAll('sessions'); } catch (e) { err.textContent = 'Local storage (IndexedDB) is unavailable: ' + e.message; return; }

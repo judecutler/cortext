@@ -244,7 +244,7 @@ class State:
         if eng is None:
             raise store.StorageError("The bridge has no EEG engine (pip install pylsl), so it cannot record.")
         if not eng.info.get("found"):
-            raise store.StorageError("No headset stream is reaching the bridge. Start eeg/stream_eeg.py first.")
+            raise store.StorageError("No headset stream is reaching the bridge. Start eeg/stream_eeg.py (Unicorn) or eeg/stream_muse.py (Muse) first.")
         if self.raw_rec:
             raise store.StorageError("A raw recording is already running. Stop it first.")
         if eng.session_id:
@@ -925,7 +925,7 @@ def main():
     if state.eeg is None:
         print("  EEG: needs pylsl (pip install pylsl) to receive the headset stream")
     else:
-        print("  EEG: waiting for an LSL EEG stream (run eeg/stream_eeg.py, or eeg/fake_eeg.py to simulate)"
+        print("  EEG: waiting for an LSL EEG stream (run eeg/stream_eeg.py or eeg/stream_muse.py, or eeg/fake_eeg.py [--muse] to simulate)"
               + ("" if eeg_engine.NUMPY_ERROR is None else "\n       numpy/scipy missing -> recording only, no scoring/brain map"))
     try:
         server.serve_forever()

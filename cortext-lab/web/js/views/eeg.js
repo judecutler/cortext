@@ -15,7 +15,22 @@ export function renderEeg(root, app) {
   const hint = h('div', { class: 'muted small' });
   const traceCanvas = h('canvas', { class: 'traces-lg' });
   const erpCanvas = h('canvas', { class: 'erp' });
-  const erpSel = h('select', { onchange: () => draw() }, ...['Pz', 'POz', 'Cz', 'PO7', 'PO8', 'Fz', 'C3', 'C4'].map((l) => h('option', { value: l }, l)));
+  // P300 sites first; the list follows the connected headset (8-ch Unicorn, or TP9/TP10 first on a Muse)
+  const ERP_ORDER = ['Pz', 'POz', 'Cz', 'PO7', 'PO8', 'TP9', 'TP10', 'Fz', 'C3', 'C4', 'AF7', 'AF8'];
+  const erpOptions = (labels) => [...ERP_ORDER.filter((l) => labels.includes(l)), ...labels.filter((l) => !ERP_ORDER.includes(l))];
+  const erpSel = h('select', { onchange: () => draw() }, ...erpOptions(['Pz', 'POz', 'Cz', 'PO7', 'PO8', 'Fz', 'C3', 'C4']).map((l) => h('option', { value: l }, l)));
+  let erpLabelsKey = '';
+  const mapNote = h('span', { class: 'muted small' }, '8 electrodes, interpolated · top view, nose up');
+  function syncLabels(labels) {
+    const key = (labels || []).join(',');
+    if (!labels || !labels.length || key === erpLabelsKey) return;
+    erpLabelsKey = key;
+    const keep = erpSel.value;
+    const opts = erpOptions(labels);
+    erpSel.replaceChildren(...opts.map((l) => h('option', { value: l }, l)));
+    erpSel.value = opts.includes(keep) ? keep : opts[0];
+    mapNote.textContent = `${labels.length} electrodes${labels.length < 8 ? ' (sparse map)' : ', interpolated'} · top view, nose up`;
+  }
   const regions = h('div', { class: 'regions' });
   const evidence = h('div', { class: 'evidence' });
   const quality = h('div', { class: 'qchips' });
@@ -27,7 +42,7 @@ export function renderEeg(root, app) {
         h('button', { class: 'btn small', type: 'button', title: 'Open the monitor in its own window for a second screen',
           onclick: () => window.open(location.pathname + '#/eeg', 'cortext-monitor', 'popup,width=1400,height=900') }, 'Open in its own window ↗'))),
     h('div', { class: 'mon-grid' },
-      h('section', { class: 'panel map-panel' }, h('div', { class: 'panel-title' }, 'Scalp map', h('span', { class: 'muted small' }, '8 electrodes, interpolated · top view, nose up')),
+      h('section', { class: 'panel map-panel' }, h('div', { class: 'panel-title' }, 'Scalp map', mapNote),
         tabs, mapCanvas, legend, hint, quality),
       h('section', { class: 'panel' }, h('div', { class: 'panel-title' }, 'Brain regions', h('span', { class: 'muted small' }, 'relative power by band')), regions),
       h('section', { class: 'panel' }, h('div', { class: 'panel-title' }, 'Answer evidence', h('span', { class: 'muted small' }, 'P300 scorer, current trial')), evidence),
@@ -49,11 +64,12 @@ export function renderEeg(root, app) {
   function draw() {
     const tr = feed.trace, erp = feed.erp;
     const eeg = app.bridge.status().eeg || {};
+    syncLabels(eeg.labels || erp?.labels);
     const live = tr && tr.data && tr.data.length;
     status.className = 'live-pill ' + (!app.bridge.status().connected ? 'off' : !live ? 'off' : tr.simulated ? 'sim' : 'on');
     status.textContent = !app.bridge.status().connected ? 'bridge offline' : !live ? 'no EEG signal' : tr.simulated ? 'SIMULATED EEG' : 'LIVE';
     meta.textContent = eeg.found ? `${eeg.device || eeg.name} · ${eeg.channels} ch · ${fmt(eeg.measured_srate, 0)} Hz · scorer: ${eeg.scorer?.active ?? '–'}` +
-      (eeg.recording ? ` · recording ${eeg.recording.session_id}` : '') : 'Start the headset streamer: python cortext-lab/eeg/stream_eeg.py';
+      (eeg.recording ? ` · recording ${eeg.recording.session_id}` : '') : 'Start the headset streamer: python cortext-lab/eeg/stream_eeg.py (Unicorn) or eeg/stream_muse.py (Muse)';
     const vals = mapValues(mode, tr, erp);
     const info = BAND_INFO[mode];
     let range = null;
