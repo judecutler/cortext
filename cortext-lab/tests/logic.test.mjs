@@ -214,7 +214,11 @@ test('sequential mode: timing parameters and duration estimate use the sequentia
   const d = estimateDurations(s);
   assert.equal(d.flashes, 8); assert.ok(Math.abs(d.flashSec - 8 * 1.3) < 1e-9);
   // the original mode is unchanged: 40 flashes x (500 + 150) ms
-  assert.ok(Math.abs(estimateDurations({ ...DEFAULT_SETTINGS }).flashSec - 26) < 1e-9);
+  assert.ok(Math.abs(estimateDurations({ ...DEFAULT_SETTINGS, trial_type: 'mcq_flash' }).flashSec - 26) < 1e-9);
+  // the default is the demo: 4 options x 3 rounds x 1.3 s, after a 5 s question
+  const demo = estimateDurations({ ...DEFAULT_SETTINGS });
+  assert.equal(DEFAULT_SETTINGS.trial_type, 'mcq_sequential'); assert.equal(demo.flashes, 12);
+  assert.ok(Math.abs(demo.flashSec - 15.6) < 1e-9);
 });
 
 test('sequential plan: one-at-a-time with fixed gap, every option shown `repeats` times, no immediate repeats', () => {

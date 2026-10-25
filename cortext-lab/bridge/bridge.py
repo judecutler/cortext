@@ -31,6 +31,8 @@ import sys
 import threading
 import time
 from functools import partial
+from pathlib import Path
+import shutil
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -61,7 +63,7 @@ except Exception as exc:  # ImportError, or OSError when liblsl is missing
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(os.path.dirname(HERE), "web")
-LOG_DIR = os.path.join(HERE, "logs")
+LOG_DIR = os.environ.get("CORTEXT_BRIDGE_LOG_DIR") or os.path.join(HERE, "logs")   # tests point this at a temp folder
 
 CSV_COLUMNS = [
     "recv_wall_iso", "recv_perf_ms", "page_t_ms", "bridge_t_ms", "est_transit_ms", "lsl_timestamp",
@@ -96,6 +98,7 @@ class State:
         self.build_lock = threading.Lock()
         self.storage_lock = threading.RLock()   # one storage operation (upload / download / delete) at a time
         self.sessions_seen = {}  # session_id -> {"last": wall time of its last marker, "ended": bool}
+        self.raw_rec = None      # the free raw EEG recording in progress (raw_start / raw_stop)
         if pylsl and not args.no_lsl:
             info = pylsl.StreamInfo(args.lsl_name, "Markers", 1, 0, "string", f"cortext-lab-{socket.gethostname()}")
             self.outlet = pylsl.StreamOutlet(info)
@@ -226,6 +229,160 @@ class State:
                 self.build_dataset(session_id)
         threading.Thread(target=later, daemon=True).start()
 
+    # ---- free raw EEG recording (no stimuli, no session): Experiment -> Data storage -> "Record raw EEG" ----
+    def raw_status(self):
+        r = self.raw_rec
+        if not r:
+            return {"recording": False}
+        eng = self.eeg
+        app_took_over = bool(eng and eng.session_id != r["id"])
+        return {"recording": True, "id": r["id"], "started": r["started_iso"], "seconds": round(time.time() - r["t0"], 1),
+                "samples": eng.samples_recorded if (eng and not app_took_over) else None, "interrupted": app_took_over}
+
+    def raw_start(self, participant="", note=""):
+        eng = self.eeg
+        if eng is None:
+            raise store.StorageError("The bridge has no EEG engine (pip install pylsl), so it cannot record.")
+        if not eng.info.get("found"):
+            raise store.StorageError("No headset stream is reaching the bridge. Start eeg/stream_eeg.py first.")
+        if self.raw_rec:
+            raise store.StorageError("A raw recording is already running. Stop it first.")
+        if eng.session_id:
+            raise store.StorageError(f"Session {eng.session_id} is recording; finish it before starting a raw recording.")
+        if participant and not all(c.isalnum() or c in "-_" for c in participant):
+            raise store.StorageError("Participant must be a code such as P01, never a name.")
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        rid = f"rawrec-{stamp}"
+        eng.start_session(rid)
+        self.raw_rec = {"id": rid, "stamp": stamp, "t0": time.time(), "started_iso": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                        "participant": participant, "note": note, "offsets": [time.time() - pylsl.local_clock()],
+                        "device": eng.info.get("device"), "simulated": bool(eng.info.get("simulated")),
+                        "srate": eng.info.get("nominal_srate"), "labels": list(eng.labels)}
+        return self.raw_status()
+
+    def raw_stop(self, upload=True):
+        r = self.raw_rec
+        if not r:
+            raise store.StorageError("No raw recording is running.")
+        eng = self.eeg
+        r["offsets"].append(time.time() - pylsl.local_clock())
+        if eng.session_id == r["id"]:
+            eng.stop_session(r["id"])
+        files = eng._find_files(r["id"])
+        self.raw_rec = None
+        if not files:
+            raise store.StorageError("Nothing was recorded (the headset stream may have dropped).")
+        out_dir = store.data_root(create=True) / store.RAW_EEG_DIR
+        out_dir.mkdir(parents=True, exist_ok=True)
+        offset = sum(r["offsets"]) / len(r["offsets"])   # wall clock - LSL clock (drifts < 1 ms over a recording)
+        name = f"{r['stamp']}_{r['participant'] or 'unknown'}{'_SIM' if r['simulated'] else ''}_raw.csv.gz"
+        out = out_dir / name
+        total, labels, first = 0, [], None
+        import gzip as _gz
+        parts = []
+        for i, f in enumerate(files):   # usually one file; more if the headset reconnected mid-recording
+            part = out if len(files) == 1 else out_dir / f".part{i}_{name}"
+            n, labels, f0 = store.export_raw_recording(f, part, unix_offset=offset)
+            total += n
+            first = first if first is not None else f0
+            parts.append(part)
+        if len(parts) > 1:   # concatenate the gzip members (a valid .gz), keeping one header
+            with _gz.open(out, "wt", encoding="utf-8", newline="") as dst:
+                for i, part in enumerate(parts):
+                    with _gz.open(part, "rt", encoding="utf-8") as src:
+                        head = src.readline()
+                        if i == 0:
+                            dst.write(head)
+                        shutil.copyfileobj(src, dst)
+                    os.remove(part)
+        for f in files:   # the CSV lives on as the .csv.gz; remove the logs copy so it isn't listed as an orphan session
+            for g in (f, f[:-4] + ".json"):
+                try:
+                    os.remove(g)
+                except OSError:
+                    pass
+        meta = {"kind": "free raw recording (no stimuli, no markers)", "device": r["device"], "simulated": r["simulated"],
+                "srate_nominal": r["srate"], "channels": labels, "samples": total,
+                "duration_s": round(time.time() - r["t0"], 1), "started": r["started_iso"],
+                "unix_start": first, "clock": "unix_time = lsl_time + (wall clock - LSL clock) measured at start and stop",
+                "units": "microvolts as sent by the headset; raw (DC offset and mains hum included)"}
+        res = {"ok": True, "local_path": store.display_path(out), "samples": total, "duration_s": meta["duration_s"], "uploaded": False}
+        if upload:
+            if r["simulated"]:
+                res["upload_error"] = "Simulated EEG is not uploaded (kept on this computer only)."
+            else:
+                try:
+                    with self.storage_lock:
+                        up = store.push_raw_eeg(out, note=r["note"], participant=r["participant"], extra=meta, name=name,
+                                                stamp=r["stamp"])
+                    res.update(uploaded=True, url=up["url"], path_in_repo=up["path_in_repo"])
+                except store.StorageError as exc:
+                    res["upload_error"] = str(exc)
+        with open(str(out) + ".json", "w", encoding="utf-8") as fh:
+            json.dump({**meta, "participant_id": r["participant"] or None, "note": r["note"],
+                       "uploaded": res.get("path_in_repo")}, fh, indent=1)
+        return res
+
+    def raw_files(self):
+        d = store.data_root() / store.RAW_EEG_DIR
+        try:
+            names = sorted((p for p in d.iterdir() if p.is_file() and not p.name.endswith(".json") and not p.name.startswith(".")),
+                           key=lambda p: p.stat().st_mtime, reverse=True)
+        except OSError:
+            return []
+        out = []
+        for p in names[:50]:
+            info = {}
+            try:
+                info = json.loads((Path(str(p) + ".json")).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass
+            out.append({"name": p.name, "size_mb": round(p.stat().st_size / 1e6, 2), "uploaded": info.get("uploaded"),
+                        "duration_s": info.get("duration_s"), "simulated": info.get("simulated", False)})
+        return out
+
+    def raw_push_local(self, name):
+        d = store.data_root() / store.RAW_EEG_DIR
+        p = d / os.path.basename(str(name))
+        if not p.is_file() or p.name.endswith(".json"):
+            raise store.StorageError(f"{name} is not in {store.display_path(d)}.")
+        meta = {}
+        try:
+            meta = json.loads(Path(str(p) + ".json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        if meta.get("simulated"):
+            raise store.StorageError("Simulated EEG is not uploaded.")
+        stamp = p.name.split("_", 1)[0] if p.name[:8].isdigit() else None
+        with self.storage_lock:
+            up = store.push_raw_eeg(p, note=meta.get("note", ""), participant=meta.get("participant_id") or "",
+                                    extra={k: v for k, v in meta.items() if k not in ("note", "participant_id", "uploaded")},
+                                    name=p.name.split("_", 1)[1] if stamp else p.name, stamp=stamp)
+        meta["uploaded"] = up["path_in_repo"]
+        with open(str(p) + ".json", "w", encoding="utf-8") as fh:
+            json.dump(meta, fh, indent=1)
+        return {"ok": True, **up}
+
+    def raw_upload_bytes(self, filename, data, note="", participant=""):
+        """A file picked in the browser (recorded with another program): keep a copy here, then upload it untouched."""
+        d = store.data_root(create=True) / store.RAW_EEG_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        local = d / store.raw_eeg_name(filename, stamp)
+        if local.suffix.lower() not in store.RAW_EEG_EXTENSIONS:
+            raise store.StorageError(f"{filename}: not an EEG file type this folder takes ({', '.join(sorted(store.RAW_EEG_EXTENSIONS))}).")
+        local.write_bytes(data)
+        meta = {"kind": "uploaded file (recorded elsewhere)", "original_name": filename, "participant_id": participant or None,
+                "note": note, "uploaded": None}
+        try:
+            with self.storage_lock:
+                up = store.push_raw_eeg(local, note=note, participant=participant, name=filename, stamp=stamp)
+            meta["uploaded"] = up["path_in_repo"]
+            return {"ok": True, **up, "local_path": store.display_path(local)}
+        finally:
+            with open(str(local) + ".json", "w", encoding="utf-8") as fh:
+                json.dump(meta, fh, indent=1)
+
     def status(self):
         consumers = None
         if self.outlet is not None:
@@ -246,6 +403,7 @@ class State:
             "clock_offset_ms": self.clock_offset_ms,
             "clock_rtt_ms": self.clock_rtt_ms,
             "eeg": self.eeg.status() if self.eeg else {"found": False, "error": "pylsl not installed: pip install pylsl"},
+            "raw_recording": self.raw_status(),
         }
 
 
@@ -293,6 +451,9 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_session_eeg(q.get("session_id", [""])[0])
         if path == "/api/sessions":
             return self.send_json({"data_root": store.display_path(store.data_root()), "sessions": self.state.inventory()})
+        if path == "/api/storage/raw":
+            return self.send_json({"ok": True, "folder": store.RAW_EEG_DIR, "recording": self.state.raw_status(),
+                                   "files": self.state.raw_files()})
         if path == "/api/storage":
             return self.send_json(self.storage_info(check=q.get("check", ["0"])[0] == "1"))
         if path == "/api/voice/status":
@@ -460,6 +621,20 @@ class Handler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         if not self.same_origin():
             return self.send_json({"ok": False, "error": "cross-site request refused"}, 403)
+        if path == "/api/storage/raw-upload":   # body = the file's bytes; name/note/participant in the query string
+            q = parse_qs(urlparse(self.path).query)
+            n = int(self.headers.get("Content-Length") or 0)
+            if n <= 0:
+                return self.send_json({"ok": False, "error": "empty file"}, 400)
+            if n > store.RAW_EEG_MAX_MB * 1_000_000:
+                self.close_connection = True
+                return self.send_json({"ok": False, "error": f"file is larger than {store.RAW_EEG_MAX_MB} MB"}, 413)
+            data = self.rfile.read(n)
+            try:
+                return self.send_json(self.state.raw_upload_bytes(q.get("name", ["recording"])[0], data,
+                                                                  note=q.get("note", [""])[0], participant=q.get("participant", [""])[0]))
+            except store.StorageError as exc:
+                return self.send_json({"ok": False, "error": str(exc)})
         try:
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n).decode() or "{}") if n else {}
@@ -517,6 +692,12 @@ class Handler(SimpleHTTPRequestHandler):
                 with state.storage_lock:
                     res = store.pull(body.get("sessions") or None, profile=body.get("profile", "epochs"))
                 return self.send_json({"ok": True, **res})
+            if path == "/api/storage/raw/start":
+                return self.send_json({"ok": True, **state.raw_start(str(body.get("participant") or "").strip(), str(body.get("note") or ""))})
+            if path == "/api/storage/raw/stop":
+                return self.send_json(state.raw_stop(upload=bool(body.get("upload", True))))
+            if path == "/api/storage/raw/push":
+                return self.send_json(state.raw_push_local(body.get("name", "")))
             if path == "/api/storage/init":
                 with state.storage_lock:
                     return self.send_json({"ok": True, **store.init_remote()})

@@ -100,6 +100,7 @@ tr.invalid td { opacity: .5; }
 .qchip.flat { border-color: var(--bad); color: var(--bad); background: rgba(255, 59, 92, .08); }
 .qchip b { font-weight: 600; }
 @media (max-width: 1100px) { .headset-card .hs-grid { grid-template-columns: 1fr 200px; } .traces-sm { grid-column: 1 / -1; } }
+@media (max-width: 560px) { .headset-card .hs-grid { grid-template-columns: minmax(0, 1fr); } .headmap-sm { justify-self: center; } }
 
 /* ---------- dataset panel ---------- */
 .dsstats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 10px 0; }

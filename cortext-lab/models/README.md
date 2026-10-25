@@ -18,7 +18,10 @@ Add `--activate` to also make it the running model (copies it into `active/`).
 240-480 ms after it appeared over Cz/Pz/POz/PO7/PO8, adds it up over repeats, and the picture with the biggest spike is
 the answer. Same for every person, works from the first trial, needs the default filter chain and the 8-channel Unicorn
 montage. Rebuild it with `python cortext-lab/pipeline/make_p3000_function.py` (`--activate` to make it the running
-model). A calibrated model should beat it once you have one; percentages are deliberately soft and uncalibrated.
+model). A calibrated model should beat it once you have one. Its percentages are uncalibrated: the bridge measures each option's total against that trial's own noise and caps the top at 90%, so pure noise reads about 40% (never above ~60% in simulation), not "100% sure".
+**One at a time only:** it needs each picture to stay alone for at least ~0.8 s (the demo's 1 s + 0.3 s gap). In flash
+mode the next flash lands inside the 240-480 ms window and gets the credit: on simulated EEG it is then at chance (3/14).
+`models/active/` ships with it, so a fresh checkout decodes from trial 1.
 
 ## Choose which model runs
 - **On the website (easiest):** Agent → *Model* block lists the library and this laptop's calibrations, with who each

@@ -107,7 +107,7 @@ export async function renderSummary(root, app, sessionId) {
   root.append(
     h('h1', {}, 'Session summary'),
     h('p', { class: 'muted' }, `${session.session_id} · participant ${session.participant_id} · ${session.device} · status ${session.status} · seed ${session.seed} · ${fmt(session.refresh_hz_est, 1)} Hz display`),
-    session.notes ? h('p', {}, 'Notes: ' + session.notes) : null,
+    session.notes ? h('p', {}, 'Notes: ' + session.notes) : '',   // root.append() would print a null as "null"
     relBox, nextBar,
     dsCard,
     h('div', { class: 'grid2' },
@@ -122,7 +122,7 @@ export async function renderSummary(root, app, sessionId) {
       h('p', {}, `Markers stored: ${markers.length} (${flashOn.length} flash_on${unsent ? `, ${unsent} NOT delivered to the bridge — check the CSV/LSL log` : ', all delivered to the bridge'}).`),
       S.prediction_real ? h('p', {}, `EEG predictor vs ground truth (n=${S.prediction_real.n}): ${pc(S.prediction_real.accuracy_vs_truth)} — descriptive only; evaluate offline with held-out controls.`) : null,
       trials.some((t) => t.model_display) ? h('p', { class: 'warn' }, `The model's probabilities were shown before the click on ${trials.filter((t) => t.model_display).length} trial(s): those clicks may be anchored on the model, so use them as feedback (model_feedback.csv), not as independent ground truth.`) : null,
-      S.prediction_mock ? h('p', { class: 'warn' }, `Mock / simulated-EEG predictions (n=${S.prediction_mock.n}) are simulated from the ground truth and are not a result.`) : null),
+      S.prediction_mock ? h('p', { class: 'warn' }, `Mock or simulated-EEG predictions (n=${S.prediction_mock.n}): mock ones are made from the ground truth, simulated-EEG ones from a fake signal (fake_eeg.py). Neither is a result.`) : null),
     h('div', {},
       h('button', { class: 'btn primary', onclick: () => exportSessionZip(sessionId) }, 'Export session (zip)'), ' ',
       ['session.json', 'trials.csv', 'markers.csv', 'model_feedback.csv'].map((f) => [h('button', { class: 'btn', onclick: () => exportSingleFile(sessionId, f) }, f), ' ']),

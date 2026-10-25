@@ -12,6 +12,7 @@ Layout, identical locally and on Hugging Face:
     sessions/<session_id>/      real recordings   (meta.json, trials.csv, events.csv, epochs.npz, eeg_clean.npz, eeg_raw.npz)
     simulated/<session_id>/     fake_eeg.py runs  (local only; never uploaded unless you force it)
     voltages/<id>_raw.csv.gz    plain voltage table per session (uploaded with each session; "upload_voltages" in dataset.json)
+    raw_eeg/<time>_<name>       raw timestamped EEG that is not an app session (free recordings, other recorders) + .json
     index.csv                   derived summary of the local sessions; rebuilt whenever sessions change
     sync_state.json             this machine's record of what it uploaded / downloaded
 
@@ -26,6 +27,8 @@ Command line (from the repo root):
     python datasets/cortext-p300/cortext_store.py pull [--all]     # download sessions (default: epochs only, the small files)
     python datasets/cortext-p300/cortext_store.py voltages [ID ...] [--signal raw|clean] [--no-upload]
                                                                 # one CSV per session: time + each electrode's µV + markers
+    python datasets/cortext-p300/cortext_store.py raw FILE ... [--note TEXT] [--participant P01]
+                                                                # upload raw EEG files untouched to raw_eeg/
     python datasets/cortext-p300/cortext_store.py delete ID ... [--remote]   # really delete (see below)
     python datasets/cortext-p300/cortext_store.py migrate          # move sessions from the old in-repo folder
 
@@ -385,6 +388,7 @@ def export_voltages(session_id, root=None, signal="raw", decimals=2):
 
     # markers -> the nearest sample of THIS signal (events.csv's "sample" column indexes eeg_clean, not eeg_raw)
     marks = {}
+    offsets = []   # wall clock (unix s) - LSL clock, from markers that carry both: gives every sample an absolute time
     ev_file = path / "events.csv"
     if ev_file.exists() and len(times):
         with open(ev_file, newline="", encoding="utf-8") as fh:
@@ -396,6 +400,10 @@ def export_voltages(session_id, root=None, signal="raw", decimals=2):
                 i = int(np.searchsorted(times, t))
                 if i > 0 and (i == len(times) or abs(times[i - 1] - t) <= abs(times[i] - t)):
                     i -= 1
+                try:
+                    offsets.append(float(m.get("wall_ms") or "") / 1000.0 - t)
+                except ValueError:
+                    pass
                 text = (m.get("event") or "").strip()
                 if m.get("option_id"):
                     text += f" option={m['option_id']}"
@@ -406,9 +414,13 @@ def export_voltages(session_id, root=None, signal="raw", decimals=2):
     out = voltage_file(session_id, signal, root)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".tmp")
-    block = np.column_stack([times - (times[0] if len(times) else 0.0), times, data.T])
-    fmt = ["%.4f", "%.6f"] + [f"%.{int(decimals)}f"] * len(labels)
-    header = ",".join(["time_s", "lsl_time"] + [f"{l}_uV" for l in labels] + ["event"])
+    cols, fmt, names = [times - (times[0] if len(times) else 0.0), times], ["%.4f", "%.6f"], ["time_s", "lsl_time"]
+    unix_offset = float(np.median(offsets)) if offsets else None
+    if unix_offset is not None:   # only when the markers carried the page's wall clock (sessions built after 2026-10-25)
+        cols.append(times + unix_offset); fmt.append("%.3f"); names.append("unix_time")
+    block = np.column_stack(cols + [data.T])
+    fmt += [f"%.{int(decimals)}f"] * len(labels)
+    header = ",".join(names + [f"{l}_uV" for l in labels] + ["event"])
     # mtime=0 -> the same recording always gives byte-identical files, so re-uploads are skipped by content hash
     with open(tmp, "wb") as raw_fh, gzip.GzipFile(fileobj=raw_fh, mode="wb", mtime=0, compresslevel=6) as gz:
         w = io.TextIOWrapper(gz, encoding="utf-8", newline="")
@@ -424,7 +436,8 @@ def export_voltages(session_id, root=None, signal="raw", decimals=2):
     os.replace(tmp, out)
     return {"session_id": session_id, "signal": signal, "path": str(out), "samples": int(len(times)),
             "channels": labels, "events": sum(len(v) for v in marks.values()), "size_mb": round(out.stat().st_size / 1e6, 2),
-            "duration_s": round(float(times[-1] - times[0]), 1) if len(times) else 0.0}
+            "duration_s": round(float(times[-1] - times[0]), 1) if len(times) else 0.0,
+            "unix_start": round(float(times[0] + unix_offset), 3) if unix_offset is not None and len(times) else None}
 
 
 def push_voltages(session_id, root=None, signal="raw", allow_simulated=False):
@@ -442,6 +455,93 @@ def push_voltages(session_id, root=None, signal="raw", allow_simulated=False):
     except Exception as exc:
         raise StorageError(_explain(exc)) from exc
     return {"ok": True, **info, "path_in_repo": rel, "url": f"https://huggingface.co/datasets/{repo}/blob/main/{rel}"}
+
+
+# ------------------------------------------------------------------ raw EEG files (raw_eeg/ on Hugging Face)
+# A separate top-level folder for timestamped raw EEG that is NOT an app session: a free recording made with the
+# "Record raw EEG" button (bridge), or any file recorded elsewhere (g.tec Recorder CSV, LabRecorder .xdf, PsychoPy, EDF).
+# Each upload is raw_eeg/<YYYYMMDD-HHMMSS>_<name> plus raw_eeg/<same>.json describing it. Nothing is converted or
+# filtered, so this is the place for "just give me the voltages with their times".
+RAW_EEG_DIR = "raw_eeg"
+RAW_EEG_MAX_MB = 1000
+RAW_EEG_EXTENSIONS = {".csv", ".gz", ".tsv", ".txt", ".xdf", ".xdfz", ".edf", ".bdf", ".fif", ".npz", ".npy", ".json",
+                      ".hdf5", ".h5", ".mat", ".vhdr", ".vmrk", ".eeg", ".set", ".fdt", ".zip"}
+_RAW_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def raw_eeg_name(filename, stamp=None):
+    """Name inside raw_eeg/: <stamp>_<safe original name>. Timestamped so two uploads never overwrite each other."""
+    base = _RAW_NAME_RE.sub("_", Path(str(filename)).name).strip("._") or "recording"
+    return f"{stamp or time.strftime('%Y%m%d-%H%M%S')}_{base[:120]}"
+
+
+def push_raw_eeg(path, note="", participant="", extra=None, name=None, stamp=None):
+    """Upload one raw EEG file, untouched, to raw_eeg/ on Hugging Face, with a .json sidecar. Returns its URL."""
+    import hashlib
+
+    path = Path(path)
+    if not path.is_file():
+        raise StorageError(f"{path} is not a file.")
+    ext = "".join(path.suffixes[-2:]).lower() if path.suffix.lower() == ".gz" else path.suffix.lower()
+    if path.suffix.lower() not in RAW_EEG_EXTENSIONS:
+        raise StorageError(f"{path.name}: not an EEG file type this folder takes ({', '.join(sorted(RAW_EEG_EXTENSIONS))}).")
+    size = path.stat().st_size
+    if size == 0:
+        raise StorageError(f"{path.name} is empty.")
+    if size > RAW_EEG_MAX_MB * 1e6:
+        raise StorageError(f"{path.name} is {size / 1e6:.0f} MB; the limit here is {RAW_EEG_MAX_MB} MB. Split or compress it.")
+    if participant and not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", str(participant)):
+        raise StorageError("Participant must be a code such as P01 (letters, digits, - or _), never a name.")
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    api, repo = _api_and_repo()
+    rel = f"{RAW_EEG_DIR}/{raw_eeg_name(name or path.name, stamp)}"
+    sidecar = {"file": rel, "original_name": str(name or path.name), "format": ext.lstrip(".") or "unknown",
+               "bytes": size, "sha256": h.hexdigest(), "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+               "participant_id": participant or None, "note": str(note or "")[:2000], **(extra or {})}
+    try:
+        api.upload_file(path_or_fileobj=str(path), path_in_repo=rel, repo_id=repo, repo_type="dataset",
+                        commit_message=f"Raw EEG {Path(rel).name}")
+        api.upload_file(path_or_fileobj=json.dumps(sidecar, indent=1).encode(), path_in_repo=rel + ".json", repo_id=repo,
+                        repo_type="dataset", commit_message=f"Raw EEG {Path(rel).name} (description)")
+    except Exception as exc:
+        raise StorageError(_explain(exc)) from exc
+    return {"ok": True, "path_in_repo": rel, "bytes": size, "sha256": sidecar["sha256"],
+            "url": f"https://huggingface.co/datasets/{repo}/blob/main/{rel}"}
+
+
+def export_raw_recording(csv_path, out_path, unix_offset=None):
+    """Turn the bridge's free-recording CSV (lsl_time, page_t_ms, Fz, ...) into a gzipped table with absolute time.
+
+    Columns: unix_time (seconds since 1970, UTC; empty if unknown), lsl_time (LSL clock, the headset's own sample
+    timestamps), then one column per electrode in microvolts exactly as the headset sent them (raw: DC offset and mains
+    hum included). Returns (samples, labels, first unix time)."""
+    import gzip
+
+    n, labels, first = 0, [], None
+    with open(csv_path, newline="", encoding="utf-8") as src, gzip.open(out_path, "wt", encoding="utf-8", newline="") as dst:
+        r, w = csv.reader(src), csv.writer(dst)
+        head = next(r, None)
+        if not head or head[0] != "lsl_time":
+            raise StorageError(f"{csv_path} is not a bridge EEG recording (expected a lsl_time column first).")
+        labels = head[2:] if len(head) > 1 and head[1] == "page_t_ms" else head[1:]
+        skip = 2 if len(head) > 1 and head[1] == "page_t_ms" else 1
+        w.writerow(["unix_time", "lsl_time"] + [f"{l}_uV" for l in labels])
+        for row in r:
+            if not row or not row[0]:
+                continue
+            try:
+                t = float(row[0])
+            except ValueError:
+                continue
+            u = "" if unix_offset is None else f"{t + unix_offset:.4f}"
+            if first is None and u:
+                first = float(u)
+            w.writerow([u, row[0]] + row[skip:])
+            n += 1
+    return n, labels, first
 
 
 def pending_uploads(root=None):
@@ -514,7 +614,7 @@ def scan_logs(log_dir):
         return out
     for f in os.listdir(log_dir):
         m = _LOG_RE.match(f)
-        if m:
+        if m and not m.group(1).startswith("rawrec-"):   # a free raw recording in progress, not a session
             d = out.setdefault(m.group(1), {"files": 0, "bytes": 0})
             d["files"] += 1
             try:
@@ -712,6 +812,19 @@ def _cmd_voltages(a):
         sys.exit(f"{failed} session(s) failed")
 
 
+def _cmd_raw(a):
+    bad = False
+    for f in a.files:
+        try:
+            r = push_raw_eeg(f, note=a.note, participant=a.participant)
+            print(f"uploaded {f} -> {r['path_in_repo']}  ({r['bytes'] / 1e6:.1f} MB)\n  {r['url']}")
+        except StorageError as exc:
+            bad = True
+            print(f"{f}: {exc}", file=sys.stderr)
+    if bad:
+        sys.exit(1)
+
+
 def _cmd_delete(a):
     if not a.yes:
         what = "from this machine AND from Hugging Face" if a.remote else "from this machine"
@@ -738,6 +851,9 @@ def main(argv=None):
     p.add_argument("--signal", choices=sorted(VOLTAGE_SIGNALS), default="raw", help="raw (default, untouched) or clean (filtered)")
     p.add_argument("--no-upload", action="store_true", help="only write the file locally (<data>/voltages/)")
     p.add_argument("--include-simulated", action="store_true"); p.set_defaults(fn=_cmd_voltages)
+    p = sub.add_parser("raw", help="upload raw EEG files (any recorder: csv, xdf, edf, fif, npz...) untouched to raw_eeg/ on Hugging Face")
+    p.add_argument("files", nargs="+"); p.add_argument("--note", default="", help="what this recording is")
+    p.add_argument("--participant", default="", help="participant code (P01), never a name"); p.set_defaults(fn=_cmd_raw)
     p = sub.add_parser("delete"); p.add_argument("sessions", nargs="+"); p.add_argument("--remote", action="store_true"); p.add_argument("--yes", action="store_true"); p.set_defaults(fn=_cmd_delete)
     sub.add_parser("migrate").set_defaults(fn=lambda a: print(json.dumps(migrate_legacy(), indent=1)))
     sub.add_parser("index").set_defaults(fn=lambda a: print(f"wrote {rebuild_index()}"))

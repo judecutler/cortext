@@ -643,10 +643,14 @@ class P300Scorer:
                     t["predicted"] = True
         sums, means, counts = P.option_evidence([f[1] for f in flashes], scores, option_ids)
         if kind == "heuristic":
-            probs = P.softmax(means, 0.5)          # 2 uV difference ~ e-fold; uncalibrated
+            probs = P.cap_top(P.softmax(means, 0.5))   # 2 uV difference ~ e-fold; uncalibrated, capped
             evidence = means
+        elif ((getattr(model, "meta", None) or {}).get("kind") == "p3000 function"):
+            # untrained spike detector: percentages relative to this trial's own noise, capped (see p300.P3000_Z_SLOPE)
+            probs, _ = P.noise_normalised_probs([f[1] for f in flashes], scores, option_ids)
+            evidence = sums
         else:
-            probs = P.softmax(sums, model.temperature)
+            probs = P.cap_top(P.softmax(sums, model.temperature))   # in-sample temperature: overconfident, so capped
             evidence = sums
         best = max(probs, key=probs.get) if n_ok else None
         return {

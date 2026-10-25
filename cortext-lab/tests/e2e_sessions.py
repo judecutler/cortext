@@ -18,7 +18,7 @@ from pw_helpers import set_num, set_participant  # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 8800 + os.getpid() % 90
 BASE = f"http://127.0.0.1:{PORT}"
-LOGS = os.path.join(ROOT, "bridge", "logs")
+LOGS = tempfile.mkdtemp(prefix="cortext-sess-logs-")   # own bridge log folder: leftovers from other suites must not show up
 
 
 def api(path, body=None, headers=None):
@@ -41,7 +41,7 @@ def main():
     data = tempfile.mkdtemp(prefix="cortext-sess-")
     before = set(os.listdir(LOGS)) if os.path.isdir(LOGS) else set()
     proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "bridge", "bridge.py"), "--port", str(PORT), "--no-lsl"], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
-                            env={**os.environ, "CORTEXT_DATA_DIR": data})
+                            env={**os.environ, "CORTEXT_DATA_DIR": data, "CORTEXT_BRIDGE_LOG_DIR": LOGS})
     try:
         for _ in range(60):
             try:

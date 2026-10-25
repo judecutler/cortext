@@ -19,7 +19,7 @@ export async function renderReview(root, app, sessionId) {
     h('h1', {}, 'Review trials'),
     h('p', { class: 'muted' }, `Session ${session.session_id} · participant ${session.participant_id} · ${session.device} · ${trials.length} attempts. `,
       'Marking a trial invalid keeps all of its data (flash order, markers, click); only the flag changes.'),
-    live ? h('p', { class: 'warn' }, 'This session is still running in this window. Use the dev panel there to change the CURRENT trial; changes made here to the trial in progress could be overwritten.') : null,
+    live ? h('p', { class: 'warn' }, 'This session is still running in this window. Use the dev panel there to change the CURRENT trial; changes made here to the trial in progress could be overwritten.') : '',
     h('div', {}, h('a', { class: 'btn', href: `#/summary/${sessionId}` }, 'Summary'), ' ',
       h('button', { class: 'btn', onclick: () => exportSessionZip(sessionId) }, 'Export session (zip)'), ' ',
       h('button', { class: 'btn danger', onclick: async () => { if ((await deleteSessionsFlow(app, [sessionId])).length) location.hash = '#/sessions'; } }, 'Delete session…')));

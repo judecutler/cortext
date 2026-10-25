@@ -124,10 +124,10 @@ export function renderRun(root, app) {
       promptEl.classList.add('show');
       const imagery = settings.imagery_ms > 0 ? 'When the screen goes dark, picture the answer in your mind until the screen comes back. Then: ' : '';
       subEl.textContent = imagery + (modality === 'audio'
-        ? (layout === 'sequential' ? 'Listen to each option and notice which one answers the question. You will choose afterwards.'
+        ? (layout === 'sequential' ? 'Listen to each option and silently count every time you hear the answer. You will choose afterwards.'
           : 'Look at the answer you think is correct and listen for its name. Do not click until the sounds stop.')
         : layout === 'sequential'
-          ? 'Watch each picture as it appears and notice which one answers the question. You will choose afterwards.'
+          ? 'Watch each picture as it appears and silently count every time the answer shows up. You will choose afterwards.'
           : 'Silently focus on the answer you think is correct. Do not click until the flashing stops.');
       subEl.classList.add('show');
       stage.dataset.phase = 'prompt';

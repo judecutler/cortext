@@ -8,7 +8,7 @@ import { listTrialTypes, getTrialType } from '../trialtypes/index.js';
 import { buildSetFromFiles, saveSet, listSets, getSet, materializeSet } from '../stimulusSets.js';
 import { db } from '../db.js';
 import { subTabs, toast } from '../ui.js';
-import { participantCard, headsetCard, hardwareCard, storageCard, autoLiveEeg, predictorName } from './rig.js';
+import { participantCard, headsetCard, hardwareCard, storageCard, rawEegCard, autoLiveEeg, predictorName } from './rig.js';
 
 const MODE_HELP = {
   mcq_flash: 'The answer tiles stay on screen and light up one at a time (like a P300 speller). Afterwards you click the answer.',
@@ -278,7 +278,11 @@ export async function renderExperiment(root, app) {
         : sc.active === 'adaptive' ? 'calibrated on this session' : `none yet: adapts after ${sc.adaptive_needs || '5 trials'}`,
         sc.model_filter_mismatch || sc.model_error ? 'warn' : sc.active === 'model' ? 'good' : '') : null,
       sc.model_filter_mismatch ? h('div', { class: 'warn small' }, `Model ${sc.model_filter_mismatch}`) : null,
-      mode === 'mock' ? h('div', { class: 'warn small' }, 'Mock predictions use the true answer: fine for rehearsing, not evidence.') : null);
+      mode === 'mock' ? h('div', { class: 'warn small' }, 'Mock predictions use the true answer: fine for rehearsing, not evidence.') : null,
+      // the p3000 function reads the spike 240-480 ms after each picture: in flash mode the next flash lands inside that
+      // window, so the spike is credited to the wrong option (measured: chance on simulated EEG). One at a time only.
+      mode === 'eeg' && sc.active === 'model' && /p3000/i.test(sc.model_file || '') && cur.trial_type === 'mcq_flash'
+        ? h('div', { class: 'warn small' }, 'The p3000 function needs “One at a time, then choose”: in flash mode the flashes come too fast for it (chance accuracy).') : null);
     [...agentBody.childNodes].forEach((n) => { if (n.nodeType === 3 && n.textContent === 'null') n.remove(); });
   }
 
@@ -312,7 +316,8 @@ export async function renderExperiment(root, app) {
   const rigTimer = setInterval(tick, 1500);     // participant / device edits happen on this page
   tick();
 
-  const lab = [hardwareCard(), storageCard()];
+  const rawCard = rawEegCard();
+  const lab = [hardwareCard(), storageCard(), rawCard];
   const section = (id, title, hint) => h('div', { class: 'section-title', id }, h('h2', {}, title), hint ? h('span', { class: 'muted small' }, hint) : null);
   const jump = (id, label) => h('button', { type: 'button', class: 'jump', onclick: () => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, label);
   const startBtn = h('button', { class: 'btn primary', onclick: start }, 'Start session');
@@ -415,7 +420,7 @@ export async function renderExperiment(root, app) {
   await refreshSources();
   await loadChosen();
   renderPlan();
-  return () => { offRig(); clearInterval(rigTimer); headset.dispose(); };
+  return () => { offRig(); clearInterval(rigTimer); headset.dispose(); rawCard.dispose(); };
 
   async function start() {
     err.textContent = '';

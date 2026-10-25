@@ -1,6 +1,6 @@
 # Test plan
 
-## A. Automated (about 1 minute)
+## A. Automated (about 25 minutes; the e2e suites start the old flash-mode + mock defaults, e2e_showtime the real ones)
 
 ```bash
 node --test tests/*.mjs               # scheduler on a simulated 60 Hz clock, flash rules, trial/validity logic, CSV, ZIP
@@ -22,6 +22,9 @@ python tests/e2e_models.py            # Agent → Model picker: switch + Undo, p
 python tests/e2e_agent.py             # Agent system map: draft filter layers + live preview, apply/undo, model paused on a filter mismatch, library
 python tests/test_filters.py          # filter chains: default == the old filter, chunked == one pass, layers, validation, live switch, /api/filters
 python tests/e2e_eeg.py               # simulated headset -> bridge -> dataset folder (occasionally flaky on the P300 amplitude check; rerun)
+python tests/test_raw_eeg.py          # Raw EEG card: free recording (unix_time + lsl_time + uV per electrode), file upload, simulated kept local
+python tests/e2e_showtime.py          # THE DEMO from a fresh browser: defaults, p3000 from trial 1, narrated guess with name + percent, click
+python tests/e2e_showtime.py --p300-uv 0   # control: no P300 -> near chance with modest percentages
 ```
 
 What they establish: each option flashes exactly `repeats` times and never twice in a row; flash onsets stay within

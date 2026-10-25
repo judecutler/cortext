@@ -205,6 +205,41 @@ def softmax(d, k=1.0):
     return {x: float(p) for x, p in zip(keys, v)}
 
 
+# Percentages for the untrained "p3000 function" (pipeline/make_p3000_function.py). A fixed softmax slope on summed
+# microvolts is only right for one noise level: with realistic 1/f background noise it said 96% on trials with no P300
+# at all (simulated). So its evidence is first divided by THIS trial's own noise: the spread of its per-flash scores
+# times sqrt(flashes per option), i.e. how many standard errors each option's total is. On simulated EEG with 1/f noise
+# (3 rounds) slope 0.5 gives about 40% average stated confidence and at most ~60% with no P300, against 39-47% accuracy
+# for a 5-8 uV P300. The cap keeps the narrator from ever saying "100%" for an uncalibrated detector.
+P3000_Z_SLOPE = 0.5
+P3000_CAP = 0.9
+
+
+def noise_normalised_probs(flash_options, flash_scores, option_ids, slope=P3000_Z_SLOPE, cap=P3000_CAP):
+    """softmax(slope * z) with z = option sum / (std of this trial's flash scores * sqrt(n flashes of that option)).
+    The top probability is capped at `cap` (the remainder is shared by the others in proportion). Returns (probs, z)."""
+    sums, _, counts = option_evidence(flash_options, flash_scores, option_ids)
+    v = np.array([x for x in flash_scores if x is not None and np.isfinite(x)], float)
+    sd = float(v.std(ddof=1)) if len(v) > 2 else 0.0
+    if not sd > 1e-9:
+        return {o: 1.0 / len(option_ids) for o in option_ids}, {o: 0.0 for o in option_ids}
+    z = {o: sums[o] / (sd * np.sqrt(max(counts[o], 1))) for o in option_ids}
+    return cap_top(softmax(z, slope), cap), z
+
+
+def cap_top(pr, cap=P3000_CAP):
+    """Limit the top probability to `cap`, sharing the rest among the others in proportion (ranking unchanged).
+    Every live percentage goes through this: no uncalibrated scorer should announce "100% sure"."""
+    if not pr or len(pr) < 2:
+        return pr
+    best = max(pr, key=pr.get)
+    if pr[best] <= cap:
+        return pr
+    rest = 1.0 - pr[best]
+    n_other = len(pr) - 1
+    return {o: (cap if o == best else ((1.0 - cap) * p / rest if rest > 1e-12 else (1.0 - cap) / n_other)) for o, p in pr.items()}
+
+
 def fit_temperature(trial_evidence):
     """Choose k for softmax(k * summed LLR) that maximizes the true option's log-probability.
 
