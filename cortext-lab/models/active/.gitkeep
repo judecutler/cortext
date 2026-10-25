@@ -1,0 +1,21 @@
+#BASIC P300 DETECTOR
+
+import numpy as np
+
+def predict_p300_selection(eeg_by_candidate, baseline_window, p300_window):
+    scores = {}
+
+    for candidate, eeg in eeg_by_candidate.items():
+        eeg = np.asarray(eeg)
+
+        baseline = np.mean(eeg[baseline_window])
+        p300_signal = eeg[p300_window] - baseline
+        scores[candidate] = np.mean(p300_signal)
+
+    predicted_answer = max(scores, key=scores.get)
+
+    return {
+        "predicted_answer": predicted_answer,
+        "predicted_true": True,
+        "p300_scores": scores
+    }
