@@ -292,6 +292,9 @@ def build(session_id, trials=None, session=None, out_root=None, log_dir=LOG_DIR,
                      "trial_valid": valid, "invalid_reason": reason, "rejected_artifact": rejected,
                      "clicked_option_id": click.get(tid) or "", "onset_lsl": t, "sample": i})
 
+    # ---- imagery epochs (only when the session used the optional imagery window: imagery_on markers)
+    imag = _imagery_epochs(markers, t_all, clean_all, seg_id, art, srate, valid_map, click)
+
     # ---- write
     root = out_root or dataset_root()
     sub = "simulated" if simulated else "sessions"
@@ -315,6 +318,9 @@ def build(session_id, trials=None, session=None, out_root=None, log_dir=LOG_DIR,
         trial_valid=col("trial_valid", bool), rejected_artifact=col("rejected_artifact", bool),
         clicked_option_id=col("clicked_option_id", str), onset_lsl=col("onset_lsl", float),
         session_id=np.array([str(session_id)] * n))
+    if imag is not None:
+        np.savez_compressed(os.path.join(tmp, "imagery.npz"), **imag, labels=np.array(labels), srate=srate,
+                            session_id=np.array([str(session_id)] * len(imag["X"])))
     with open(os.path.join(tmp, "events.csv"), "w", newline="", encoding="utf-8") as fh:
         keys = ["lsl_time", "sample", "event", "trial_id", "trial_index", "option_id", "option_position", "category",
                 "is_target", "repeat_index", "flash_index", "true_answer_id", "extra"]
@@ -347,6 +353,9 @@ def build(session_id, trials=None, session=None, out_root=None, log_dir=LOG_DIR,
         "trials_valid": len({r["trial_id"] for r in rows if r["trial_valid"]}),
         "flash_markers_without_eeg": len(flashes) - n,
     }
+    if imag is not None:
+        report["imagery_epochs"] = int(len(imag["X"]))
+        report["imagery_epochs_rejected_artifact"] = int(imag["rejected_artifact"].sum())
     report["verdict"] = quality_verdict(report, labels)
     meta = {
         "session_id": session_id, "dataset": "cortext-p300", "pipeline_version": PIPELINE_VERSION,
@@ -357,7 +366,9 @@ def build(session_id, trials=None, session=None, out_root=None, log_dir=LOG_DIR,
         "settings": (session or {}).get("settings"), "processing": PARAMS, "quality": report,
         "sources": {"eeg_logs": [os.path.basename(f) for f in eeg_files], "marker_logs": [os.path.basename(f) for f in marker_files]},
         "files": {"eeg_clean.npz": "noise-reduced continuous EEG", "eeg_raw.npz": "raw recording" if keep_raw else None,
-                  "epochs.npz": "epochs on every flash onset", "events.csv": "all markers", "trials.csv": "app trial table" if trials else None},
+                  "epochs.npz": "epochs on every flash onset",
+                  "imagery.npz": "one epoch per imagery window (-200 ms .. imagery_ms after imagery_on)" if imag is not None else None,
+                  "events.csv": "all markers", "trials.csv": "app trial table" if trials else None},
     }
     with open(os.path.join(tmp, "meta.json"), "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2, default=str)
@@ -365,6 +376,49 @@ def build(session_id, trials=None, session=None, out_root=None, log_dir=LOG_DIR,
     os.replace(tmp, out)
     store.rebuild_index(root)
     return {"path": out, "relative_path": store.display_path(out), "session_id": session_id, "simulated": simulated, "quality": report}
+
+
+def _imagery_epochs(markers, t_all, clean_all, seg_id, art, srate, valid_map, click):
+    """One epoch per imagery window: -200 ms .. imagery_ms after imagery_on, baseline -200..0 ms.
+
+    Labels: option_id / category = the correct answer the participant was asked to picture. All epochs in a session get
+    the length of the SHORTEST window so they stack. Artifact epochs are flagged, not dropped (same rule as flashes).
+    Returns None when the session has no imagery_on markers.
+    """
+    ons = [m for m in markers if m["event"] == "imagery_on" and m.get("lsl_timestamp")]
+    if not ons:
+        return None
+    durs = []
+    for m in ons:
+        try:
+            durs.append(float((json.loads(m.get("extra") or "{}") or {}).get("imagery_ms")) / 1000.0)
+        except (TypeError, ValueError):
+            pass
+    dur = min(durs) if durs else 2.0
+    n0 = int(round(PARAMS["epoch_tmin_s"] * srate))
+    n1 = int(round(dur * srate))
+    times = np.arange(n0, n1) / srate
+    bl = (times >= PARAMS["baseline_s"][0]) & (times < PARAMS["baseline_s"][1])
+    X, rows = [], []
+    for m in ons:
+        t = float(m["lsl_timestamp"])
+        i = int(np.searchsorted(t_all, t))
+        if i + n0 < 0 or i + n1 > len(t_all) or abs(t_all[min(i, len(t_all) - 1)] - t) > 1.5 / srate:
+            continue
+        if seg_id[i + n0] != seg_id[i + n1 - 1]:
+            continue
+        ep = clean_all[i + n0:i + n1].T
+        ep = ep - ep[:, bl].mean(axis=1, keepdims=True)
+        tid = int(m["trial_id"])
+        valid, _ = valid_map.get(tid, (False, "unknown trial"))
+        X.append(ep.astype(np.float32))
+        rows.append((tid, m.get("option_id") or "", m.get("category") or "", valid, bool(art[i + n0:i + n1].any()),
+                     click.get(tid) or "", t))
+    n = len(rows)
+    col = lambda k, dt=None: np.array([r[k] for r in rows], dtype=dt)  # noqa: E731
+    return {"X": np.array(X, dtype=np.float32).reshape(n, clean_all.shape[1], len(times)), "times": times,
+            "trial_id": col(0, np.int32), "option_id": col(1, str), "category": col(2, str), "trial_valid": col(3, bool),
+            "rejected_artifact": col(4, bool), "clicked_option_id": col(5, str), "onset_lsl": col(6, float)}
 
 
 def quality_verdict(r, labels):

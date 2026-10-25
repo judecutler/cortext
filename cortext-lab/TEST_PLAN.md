@@ -12,6 +12,8 @@ python tests/e2e_sequential.py        # upload (folder, config+images, warnings,
 python tests/test_store.py            # storage layer against a FAKE Hugging Face API: push, pull, buckets, local + remote delete, migrate
 python tests/e2e_sessions.py          # sessions page: badges, buckets, real deletion (needs an empty bridge/logs/), refuses running sessions, CSRF guard
 python tests/e2e_presets.py           # question list, shuffle buttons, presets save/load/export/import, running from a list
+python tests/test_imagery.py         # imagery window: pipeline writes imagery.npz with the right labels and timing; plain sessions unchanged
+python tests/e2e_imagery.py          # imagery window in both modes: off by default, dark stage + fixation only, markers, 1 s settle before flashes
 python tests/e2e_panel.py             # run view: Hide/Show panel button and the I key
 python tests/e2e_eeg.py               # simulated headset -> bridge -> dataset folder (occasionally flaky on the P300 amplitude check; rerun)
 ```
