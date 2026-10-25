@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """E2E: voice features in headless Chrome against the real bridge and a FAKE OpenAI-compatible LLM.
-  * Setup: narrator name, LLM provider, mood + editable context, Test narrator
+  * Experiment tab: narrator name; Agent → Result: LLM provider, mood + editable context, Test narrator
   * Session 1 (one at a time): question read aloud, AUDIO-only stimuli (buffers, latency in markers), narrator after click
   * Session 2 (flash): audio + visual stimuli, narrator BEFORE the click with the built-in lines (flagged as shown)
 Run: python tests/e2e_voice.py  (needs playwright + chromium; the bridge needs a TTS engine for buffer timing, e.g.
@@ -82,10 +82,12 @@ def main():
             page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
             page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" and "ERR_TUNNEL" not in m.text and "ERR_NAME" not in m.text and "Failed to load resource" not in m.text else None)
 
-            # ---------- Setup: narrator ----------
-            page.goto(BASE + "/#/setup")
-            page.wait_for_selector("h2:text-is('Voice & narrator (demo)')")
+            # ---------- narrator: name on the Experiment tab, voice + LLM on Agent → Result ----------
+            page.goto(BASE + "/#/experiment")
+            page.wait_for_selector("h1:text-is('Experiment')")
             page.fill("input[placeholder='e.g. Jude (optional)']", "Jude")
+            page.goto(BASE + "/#/agent/result")
+            page.wait_for_selector("h3:text-is('Voice & narrator')")
             set_select(page, "Narrator writes with", "openai")
             set_select(page, "Mood", "sports")
             ctx = field(page, "Narrator context").locator("textarea")
@@ -160,8 +162,8 @@ def main():
             assert "Jude" not in json.dumps(page.evaluate("window.cortext.runner.session")), "display name never in the session record"
 
             # ---------- Session 2: flash mode, audio + visual, narrator before the click, built-in lines ----------
-            page.goto(BASE + "/#/setup")
-            page.wait_for_selector("h2:text-is('Voice & narrator (demo)')")
+            page.goto(BASE + "/#/agent/result")
+            page.wait_for_selector("h3:text-is('Voice & narrator')")
             set_select(page, "Narrator writes with", "template")
             set_select(page, "Mood", "default")
             page.click("#topbar nav a[data-nav=experiment]")

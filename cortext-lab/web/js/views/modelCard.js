@@ -1,6 +1,8 @@
-// Setup → "P300 model": which trained model predicts. Lists the team library (cortext-lab/models/library, shared
+// Agent → Model block: which trained model predicts. Lists the team library (cortext-lab/models/library, shared
 // through git) and the models calibrated live on this laptop (bridge/logs), and switches the running model in the
 // bridge without a restart. The choice is also written to cortext-lab/models/active so the next start uses it.
+// A model only works with the filter chain it was trained with, so "Use this" also switches the filters to that chain
+// (and Undo switches both back).
 import { h } from '../util.js';
 import { toast } from '../ui.js';
 
@@ -29,6 +31,13 @@ function accText(m) {
     `${pct(m.cv_answer_accuracy)}${chance}`, h('span', { class: 'muted small' }, shuf));
 }
 
+function filterPill(m) {
+  if (m.error || m.fits_filters == null) return h('span', { class: 'muted small' }, m.filter_name || '–');
+  return h('span', { title: (m.filter_summary || []).join(' → ') },
+    m.fits_filters ? h('span', { class: 'pill good' }, 'running') : h('span', { class: 'pill warn', title: 'Trained with other filters. Use this switches the filters to its chain.' }, 'other'),
+    ' ', h('span', { class: 'small' }, m.filter_name));
+}
+
 function fitPill(m, live) {
   if (m.error) return h('span', { class: 'pill bad', title: m.error }, 'unusable');
   if (!live) return h('span', { class: 'pill', title: 'Connect the headset to check' }, 'no headset');
@@ -36,7 +45,7 @@ function fitPill(m, live) {
     : h('span', { class: 'pill bad', title: `This headset has no ${(m.missing_channels || []).join(', ')}` }, 'wrong channels');
 }
 
-export function modelCard(getParticipant) {
+export function modelCard(getParticipant, { onChange, onInfo } = {}) {
   const running = h('div', { class: 'model-running' }, 'Loading…');
   const warnings = h('div', {});
   const tbody = h('tbody', {});
@@ -65,14 +74,20 @@ export function modelCard(getParticipant) {
     return hit ? hit.id : null;
   }
 
-  async function use(id, label) {
+  async function use(id, label, restoreFilters = null) {
     const prev = last ? runningId(last) : null;
-    const r = await act(() => api('/api/models/select', { id }));
+    let prevFilters = null;
+    try { prevFilters = (await api('/api/filters')).running?.spec || null; } catch { /* bridge gone: act() reports it */ }
+    const r = await act(() => api('/api/models/select', { id, follow_filters: !restoreFilters }));
     if (!r?.ok) return;
+    if (restoreFilters) await api('/api/filters/apply', { spec: restoreFilters, source: 'Undo (Agent page)' }).catch(() => null);
     say('');
-    toast(id ? `Now predicting with ${label}` : 'No trained model: the scorer will adapt to this session', 'good', null,
-      { label: 'Undo', fn: () => use(prev, prev ? prev.split('/').pop() : 'none') }, 'model-switch');
-    if (r.note) say(r.note, 'warn');
+    const switched = r.filters_switched ? ' (filters switched to its chain)' : '';
+    toast(id ? `Now predicting with ${label}${switched}` : 'No trained model: the scorer will adapt to this session', 'good', null,
+      { label: 'Undo', fn: () => use(prev, prev ? prev.split('/').pop() : 'none', r.filters_switched ? prevFilters : null) }, 'model-switch');
+    if (r.note) say(r.note, r.filters_switched ? 'good' : 'warn');
+    if (restoreFilters || r.filters_switched) refresh();
+    onChange?.();
   }
 
   async function saveCal(m) {
@@ -96,17 +111,19 @@ export function modelCard(getParticipant) {
     const sim = m.simulated ? h('span', { class: 'pill warn', title: 'Trained on simulated EEG (fake_eeg.py): not a real brain model' }, 'SIM') : null;
     const useBtn = isRunning ? h('span', { class: 'pill good' }, '● running')
       : h('button', { class: 'btn small', type: 'button', disabled: !!m.error || (live && !m.fits_headset),
-        title: m.error || (live && !m.fits_headset ? `Made for other electrodes: this headset has no ${(m.missing_channels || []).join(', ')}` : 'Predict with this model from the next trial on'),
+        title: m.error || (live && !m.fits_headset ? `Made for other electrodes: this headset has no ${(m.missing_channels || []).join(', ')}`
+          : m.fits_filters === false ? 'Predict with this model from the next trial on. Also switches the filters to the chain it was trained with.' : 'Predict with this model from the next trial on'),
         onclick: () => use(m.id, m.file) }, 'Use this');
     const save = m.group === 'calibration' ? h('button', { class: 'btn small', type: 'button', disabled: !!m.error, title: 'Copy into cortext-lab/models/library so teammates get it through git', onclick: () => saveCal(m) }, 'Save to library') : null;
     return h('tr', { class: isRunning ? 'model-on' : '', dataset: { id: m.id } },
       h('td', {}, h('div', { class: 'mono small' }, m.file, ' ', sim), h('div', { class: 'muted small' }, m.trained_at ? m.trained_at.replace('T', ' ').slice(0, 16) : m.modified)),
-      h('td', {}, who(m)), h('td', { class: 'small' }, dataText(m)), h('td', { class: 'small' }, accText(m)), h('td', {}, fitPill(m, live)),
+      h('td', {}, who(m)), h('td', { class: 'small' }, dataText(m)), h('td', { class: 'small' }, accText(m)), h('td', {}, filterPill(m)), h('td', {}, fitPill(m, live)),
       h('td', { class: 'model-acts' }, useBtn, save));
   }
 
   function render(info) {
     last = info;
+    onInfo?.(info);
     const run = info.running;
     const live = !!(info.live_channels && info.live_channels.length);
     const runId = runningId(info);
@@ -125,14 +142,16 @@ export function modelCard(getParticipant) {
     }
     const w = [];
     if (run?.model_error) w.push(['bad', run.model_error]);
+    if (run?.model_filter_mismatch) w.push(['warn', `This model is ${run.model_filter_mismatch}`]);
+    if (run?.filters_reset_note) w.push(['warn', run.filters_reset_note]);
     if (mi?.simulated) w.push(['warn', 'This model was trained on SIMULATED EEG. It cannot read a real brain.']);
     if (mi && pid && mi.participants?.length && !mi.participants.includes(pid)) {
-      w.push(['warn', `This model was trained on ${who(mi)}, but the participant above is ${pid}. P300 models are personal: use one trained on ${pid}, or calibrate first.`]);
+      w.push(['warn', `This model was trained on ${who(mi)}, but the participant on the Experiment tab is ${pid}. P300 models are personal: use one trained on ${pid}, or calibrate first.`]);
     }
     if (info.active_warning) w.push(['warn', info.active_warning]);
     warnings.replaceChildren(...w.map(([k, t]) => h('div', { class: `note-banner ${k === 'warn' ? 'warn-banner' : ''} small` }, h('span', { class: k }, t))));
-    const section = (title, list, empty) => [h('tr', { class: 'model-group' }, h('td', { colspan: 6 }, title)),
-      ...(list.length ? list.map((m) => row(m, live, runId)) : [h('tr', {}, h('td', { colspan: 6, class: 'muted small' }, empty))])];
+    const section = (title, list, empty) => [h('tr', { class: 'model-group' }, h('td', { colspan: 7 }, title)),
+      ...(list.length ? list.map((m) => row(m, live, runId)) : [h('tr', {}, h('td', { colspan: 7, class: 'muted small' }, empty))])];
     tbody.replaceChildren(
       ...section('Team library · cortext-lab/models/library (shared through GitHub)', info.library,
         'Empty. Train with pipeline/train_p300.py (saves here), add a file below, or git pull to get teammates’ models.'),
@@ -145,18 +164,18 @@ export function modelCard(getParticipant) {
     try { render(await api('/api/models')); } catch { running.textContent = 'The bridge is not running, so models cannot be listed.'; tbody.replaceChildren(); }
   }
 
-  const el = h('div', { class: 'card span2 model-card' },
-    h('div', { class: 'card-head' }, h('h2', {}, 'P300 model (what predicts)'), h('button', { class: 'btn small', type: 'button', onclick: refresh }, 'Refresh')),
+  const el = h('div', { class: 'model-card' },
+    h('div', { class: 'card-head' }, h('h3', {}, 'P300 model (what predicts)'), h('button', { class: 'btn small', type: 'button', onclick: refresh }, 'Refresh')),
     running, warnings,
     h('div', { class: 'table-wrap' }, h('table', { class: 'models' },
-      h('thead', {}, h('tr', {}, ...['Model', 'Participant', 'Trained on', 'Held-out accuracy', 'Headset', ''].map((t) => h('th', {}, t)))), tbody)),
+      h('thead', {}, h('tr', {}, ...['Model', 'Participant', 'Trained on', 'Held-out accuracy', 'Filters', 'Headset', ''].map((t) => h('th', {}, t)))), tbody)),
     h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' } },
       h('button', { class: 'btn small', type: 'button', onclick: () => use(null, 'none') }, 'No trained model (calibrate live)'),
       h('button', { class: 'btn small', type: 'button', onclick: () => file.click() }, 'Add a model file…'), file),
     h('p', { class: 'muted small', style: { margin: '8px 0 0' } },
-      '“Use this” switches immediately, no restart, and becomes the default for the next start. Models are personal: pick one trained on the person in the chair. To share a calibration, Save to library, then commit cortext-lab/models/library.'),
+      '“Use this” switches immediately, no restart, and becomes the default for the next start. It also switches the filters to the chain the model was trained with. Models are personal: pick one trained on the person in the chair. To share a calibration, Save to library, then commit cortext-lab/models/library.'),
     msg);
   refresh();
   const timer = setInterval(refresh, 8000);       // calibrations appear during a session; teammates' models after a git pull
-  return { el, refresh, dispose: () => clearInterval(timer) };
+  return { el, refresh, get info() { return last; }, dispose: () => clearInterval(timer) };
 }

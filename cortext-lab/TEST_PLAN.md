@@ -18,7 +18,9 @@ python tests/e2e_panel.py             # run view: Hide/Show panel button and the
 python tests/test_voice.py            # voice endpoints against a FAKE LLM: custom context, honesty rules, missing key, CSRF; TTS if installed
 python tests/e2e_voice.py             # question aloud, audio-only stimuli (markers + latency), narrator before/after click, name kept out of data
 python tests/test_models.py           # models/active loaded at startup, live switching, uploads, path safety, never deletes a model
-python tests/e2e_models.py            # Setup → P300 model picker: switch + Undo, participant/SIM warnings, session predicts with the pick
+python tests/e2e_models.py            # Agent → Model picker: switch + Undo, participant/SIM warnings, session predicts with the pick
+python tests/e2e_agent.py             # Agent system map: draft filter layers + live preview, apply/undo, model paused on a filter mismatch, library
+python tests/test_filters.py          # filter chains: default == the old filter, chunked == one pass, layers, validation, live switch, /api/filters
 python tests/e2e_eeg.py               # simulated headset -> bridge -> dataset folder (occasionally flaky on the P300 amplitude check; rerun)
 ```
 
@@ -30,7 +32,7 @@ with no sequence gaps; discard/redo/early-click/export/review behave and never d
 ## B. Manual, before the first real session (about 10 minutes)
 
 1. `python bridge/bridge.py`, open the page. Top bar: bridge **connected**; LSL **on** if pylsl is installed.
-2. Setup with a test participant, 3 questions, 10 repeats. Start. Check the stage reads clearly from the participant's
+2. Experiment tab, section 1, with a test participant, 3 questions, 10 repeats. Start. Check the stage reads clearly from the participant's
    seat (tile size, contrast), at the real display and browser size.
 3. Trial 1: press `Space`; confirm only one tile is lit at a time, no animations, no repeats back-to-back; during flashing
    click a tile (nothing happens on screen; dev panel "Early clicks" goes to 1); after flashing click the answer.
@@ -46,7 +48,7 @@ with no sequence gaps; discard/redo/early-click/export/review behave and never d
 11. With LabRecorder: confirm `CorTextMarkers` appears, record 1 trial, and check the XDF contains the markers
     (`LSL recorder attached` turns green while recording).
 12. Run `TIMING_CHECKLIST.md`.
-13. Sequential mode: Setup → Presentation mode → "One at a time, then choose". Start; the question stays put, each option
+13. Sequential mode: Experiment → Design → Presentation mode → "One at a time, then choose". Start; the question stays put, each option
     appears alone (1 s), then the grid appears with percentages; click; check the summary page shows the "anchored" warning
     and `model_feedback.csv` has one row per option.
 14. Upload: drop a folder of your own images (sub-folder per category) and a .json + images; check the item count and

@@ -25,7 +25,7 @@ export async function renderSummary(root, app, sessionId) {
   const rebuildBtn = h('button', { class: 'btn', onclick: doBuild }, 'Rebuild');
   const dsCard = h('div', { class: 'card dataset-card' },
     h('h2', {}, 'Training dataset'),
-    h('p', { class: 'muted small' }, 'The EEG of this session is cleaned automatically (drift + mains removal, 0.5–40 Hz, bad-electrode repair, artifact flags), cut into epochs on every flash and saved to data/cortext-p300/ on this computer. "Upload" sends that folder to the private Hugging Face dataset so teammates can download it and train (set up under Setup → Data storage).'),
+    h('p', { class: 'muted small' }, 'The EEG of this session is cleaned automatically (drift + mains removal, 0.5–40 Hz, bad-electrode repair, artifact flags), cut into epochs on every flash and saved to data/cortext-p300/ on this computer. "Upload" sends that folder to the private Hugging Face dataset so teammates can download it and train (set up under Experiment → Lab & data).'),
     dsBody, h('div', { style: { marginTop: '10px', display: 'flex', gap: '8px' } }, pushBtn, rebuildBtn), dsLog);
 
   function showDs(r) {

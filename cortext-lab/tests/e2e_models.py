@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""E2E: Setup → "P300 model" picker in headless Chrome, against the real bridge + simulated headset (fake_eeg.py).
+"""E2E: Agent → Model block ("P300 model" picker) in headless Chrome, against the real bridge + simulated headset (fake_eeg.py).
   * lists the team library with participant, data, held-out accuracy, headset fit (wrong-channel model flagged)
   * "Use this" switches the running model live (no restart), Undo switches back, active/ follows
-  * warns when the model's participant differs from the Setup participant, and when it was trained on simulated EEG
+  * warns when the model's participant differs from the participant on the Experiment tab, and when it was trained on simulated EEG
   * "Add a model file…" uploads into the library
   * a session then really predicts with the picked model (prediction.scorer == "model")
 Run: python tests/e2e_models.py (needs playwright + chromium + pylsl)."""
@@ -65,9 +65,11 @@ def main():
             page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
             page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" and "ERR_" not in m.text and "Failed to load resource" not in m.text else None)
 
-            page.goto(BASE + "/#/setup")
-            page.wait_for_selector(".model-card tr[data-id='library/P02_20261025-0930.npz']", timeout=20000)
+            page.goto(BASE + "/#/experiment")
+            page.wait_for_selector("h1:text-is('Experiment')")
             page.fill("input[placeholder='e.g. P01']", "P01")
+            page.goto(BASE + "/#/agent/model")
+            page.wait_for_selector(".model-card tr[data-id='library/P02_20261025-0930.npz']", timeout=20000)
             page.wait_for_function("document.querySelector('.model-card tr[data-id=\"library/P03_32ch.npz\"]')?.textContent.includes('wrong channels')", timeout=15000)
             assert "No trained model" in running_text(page), running_text(page)
             assert page.locator(".model-card tr[data-id='library/P03_32ch.npz'] button:text('Use this')").is_disabled()
@@ -77,7 +79,7 @@ def main():
             # switch to P02 live: running line, mismatch warning, active/ holds it
             row.locator("text=Use this").click()
             page.wait_for_function("document.querySelector('.model-card .model-running').textContent.includes('P02_20261025-0930.npz')")
-            page.wait_for_selector("text=but the participant above is P01")
+            page.wait_for_selector("text=but the participant on the Experiment tab is P01")
             assert os.listdir(act) == ["P02_20261025-0930.npz"], os.listdir(act)
             st = json.loads(urllib.request.urlopen(BASE + "/api/status").read())["eeg"]["scorer"]
             assert st["active"] == "model" and st["model_file"].endswith("P02_20261025-0930.npz"), st
@@ -91,7 +93,7 @@ def main():
             page.locator(".model-card tr[data-id='library/P01_20261025-0900_SIM.npz'] >> text=Use this").click()
             page.wait_for_function("document.querySelector('.model-card .model-running').textContent.includes('P01_20261025-0900_SIM.npz')")
             page.wait_for_selector("text=trained on SIMULATED EEG")
-            assert page.locator("text=but the participant above is").count() == 0
+            assert page.locator("text=but the participant on the Experiment tab is").count() == 0
             page.locator(".model-card").screenshot(path=os.path.join(SHOTS, "40_model_picker.png"))
 
             # upload a friend's model file into the library

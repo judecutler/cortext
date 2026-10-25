@@ -50,15 +50,16 @@ def main():
             page = browser.new_page(viewport={"width": 1600, "height": 950})
             page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
             page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" and "ERR_TUNNEL" not in m.text and "fonts.g" not in m.text else None)
-            page.goto(BASE + "/#/setup")
+            page.goto(BASE + "/#/experiment")
             page.wait_for_selector("text=Auto-filled", timeout=15000)
             assert field(page, "Device used").locator("select").evaluate("s => s.value") == "Simulated EEG (fake_eeg.py)"
-            assert field(page, "Predictor").locator("select").evaluate("s => s.value") == "eeg"
+            assert page.evaluate("JSON.parse(localStorage.getItem('cortext-lab.settings.v1')).predictor_mode") == "eeg"
+            page.wait_for_selector("#agentSummary >> text=Live EEG")
             assert "SIMULATED" in page.inner_text(".headset-card")
             assert page.locator(".headset-card .qchip").count() == 8
             time.sleep(1.0)
             page.screenshot(path=os.path.join(SHOTS, "20_setup_headset.png"))
-            print("setup: headset detected, device + predictor auto-filled, 8 electrode quality chips: OK")
+            print("experiment tab: headset detected, device + predictor auto-filled, 8 electrode quality chips: OK")
 
             # ---- neural monitor in a second tab ----
             mon = browser.new_page(viewport={"width": 1600, "height": 1000})

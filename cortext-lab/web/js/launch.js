@@ -66,7 +66,7 @@ export function goRun(app, pending) {
 /**
  * Start the next session or a redo, based on a recorded session.
  *   mode 'next' | 'redo'
- *   participant  for 'next' only (defaults to the Setup tab's participant); a redo keeps the original participant
+ *   participant  for 'next' only (defaults to the participant on the Experiment tab); a redo keeps the original participant
  */
 export async function launchFrom(app, sessionId, { mode = 'next', participant = null } = {}) {
   const prev = await db.get('sessions', sessionId);

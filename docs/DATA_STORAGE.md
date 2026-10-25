@@ -21,11 +21,11 @@ Raw EEG is large, so teammates normally download only the small `epochs.npz` fil
 2. Create an **access token** (Settings → Access Tokens) with *write* permission to your repo.
 3. On each machine that records or downloads: `pip install huggingface_hub`, then `hf auth login` (paste the token). Or set the `HF_TOKEN` environment variable. The token is never stored in this repo.
 4. Edit `datasets/cortext-p300/dataset.json`: set `"hf_repo": "your-name-or-org/cortext-p300"`. Commit that one line so teammates share it.
-5. Create the repo (private): `python datasets/cortext-p300/cortext_store.py init` (or the **Create repo** button on the Setup tab).
-6. Check: `python datasets/cortext-p300/cortext_store.py status` (or **Check connection** on the Setup tab).
+5. Create the repo (private): `python datasets/cortext-p300/cortext_store.py init` (or the **Create the repo** button: Experiment → Lab & data → Data storage).
+6. Check: `python datasets/cortext-p300/cortext_store.py status` (or **Check connection** on the same card).
 7. Have old sessions from the in-repo folder? `python datasets/cortext-p300/cortext_store.py migrate`, then `push`.
 
-After that: the Setup tab shows what is uploaded; tick **Upload automatically** to upload each session when it ends, or press **Upload pending**.
+After that: the Data storage card (Experiment → Lab & data) shows what is uploaded; tick **Upload automatically** to upload each session when it ends, or press **Upload pending**.
 
 ## Deleting
 

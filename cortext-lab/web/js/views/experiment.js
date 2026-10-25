@@ -8,12 +8,16 @@ import { listTrialTypes, getTrialType } from '../trialtypes/index.js';
 import { buildSetFromFiles, saveSet, listSets, getSet, materializeSet } from '../stimulusSets.js';
 import { db } from '../db.js';
 import { subTabs, toast } from '../ui.js';
+import { participantCard, headsetCard, hardwareCard, storageCard, autoLiveEeg, predictorName } from './rig.js';
 
 const MODE_HELP = {
   mcq_flash: 'The answer tiles stay on screen and light up one at a time (like a P300 speller). Afterwards you click the answer.',
   mcq_sequential: 'The question stays on screen. Each option’s picture/text appears alone, one after another. Then the full multiple-choice grid appears with the model’s probability on every choice, and you click the correct one.',
 };
 
+// The Experiment tab: who is in the chair and whether the headset is good, the experiment design, and the lab's
+// display / storage settings, all on one page with one Start button. (This used to be two tabs, Setup + Experiment.)
+// How the EEG becomes an answer (filters, model, predictor, narrator voice) is on the Agent tab.
 export async function renderExperiment(root, app) {
   const s = loadSettings();
   const err = h('div', { class: 'bad' });
@@ -94,8 +98,8 @@ export async function renderExperiment(root, app) {
     sel('stim_modality', 'Stimulus modality', [['visual', 'Visual (pictures / text)'], ['audio', 'Audio: each option is spoken, nothing changes on screen'], ['audiovisual', 'Audio + visual together']],
       'Plays the item’s own audio file if the stimulus set has one (upload dog.mp3 next to dog.png), otherwise speaks its text. Sounds are pre-loaded and start on the marker frame; each flash_on marker records the audio latency. One-at-a-time mode (1 s each) suits spoken words best.'),
     sel('narrate', 'Narrator', [['off', 'Off'], ['after_click', 'After the answer: announces the model’s guess'], ['before_click', 'Before the answer (show mode)']],
-      'Voice, mood and LLM are set in Setup → Voice & narrator. “Before the answer” tells the participant the guess, so those clicks are flagged model_shown_before_click and must not be used to evaluate the model.'),
-    h('div', {}, h('a', { class: 'btn small', href: '#/setup' }, 'Voice & narrator settings →')));
+      'Voice, mood and LLM are set on the Agent tab (Result block). “Before the answer” tells the participant the guess, so those clicks are flagged model_shown_before_click and must not be used to evaluate the model.'),
+    h('div', {}, h('a', { class: 'btn small', href: '#/agent/result' }, 'Voice & narrator settings →')));
   const respCard = h('div', { class: 'card' }, h('h2', {}, 'Response & cleaning'),
     chk('feedback', 'Show correct / incorrect', 'Shown after the click, never while stimuli are on screen.'),
     sel('post_mode', 'After each trial', [['manual', 'Wait for operator (Space = next)'], ['auto', 'Auto-advance']], 'Discard / Redo stay available while waiting.'),
@@ -253,33 +257,78 @@ export async function renderExperiment(root, app) {
       planBtn('Export…', () => { try { exportPreset(presetSel.value); } catch (e) { toast(e.message, 'bad'); } }, 'Download as a .json file to share'),
       planBtn('Import…', () => presetFile.click(), 'Load a preset .json from a teammate'), presetFile),
     h('div', { class: 'field' }, h('label', {}, 'Save current as'), presetName,
-      h('small', {}, 'Saves the experiment settings (not the Setup tab) and the question list.')),
+      h('small', {}, 'Saves the experiment design and the question list (not the participant, headset, storage or Agent settings).')),
     h('div', { class: 'ctrls' }, planBtn('Save as new', () => {
       try { const n = savePreset(presetName.value, snapshotPreset()); presetName.value = ''; fillPresetList(n); toast(`Saved “${n}”.`, 'good'); } catch (e) { toast(e.message, 'bad'); }
     })));
-  // ---------- rig strip: what Setup decided (read-only here) ----------
-  const rig = h('div', { class: 'rigstrip card' });
+  // ---------- participant, headset, and what the Agent will do ----------
+  const agentBody = h('div', { class: 'agent-sum' });
+  const agentCard = h('div', { class: 'card', id: 'agentSummary' },
+    h('div', { class: 'card-head' }, h('h2', {}, 'Agent'), h('a', { class: 'btn small', href: '#/agent' }, 'Open the Agent →')),
+    h('p', { class: 'muted small', style: { margin: '0 0 6px' } }, 'What turns the EEG into an answer. Change it on the Agent tab.'), agentBody);
+  function updateAgent() {
+    const cur = loadSettings(), b = app.bridge.status(), eeg = b.eeg || {}, sc = eeg.scorer || {}, fl = eeg.filters || {};
+    const line = (k, v, cls = '') => h('div', { class: 'row' }, h('span', { class: 'muted' }, k), h('span', { class: cls }, v));
+    const mode = cur.predictor_mode;
+    agentBody.replaceChildren(
+      line('Predictor', predictorName(mode), mode === 'mock' ? 'warn' : mode === 'off' ? 'muted' : ''),
+      mode === 'eeg' ? line('Filters', b.connected ? (fl.summary || ['–']).join(' → ') : 'bridge offline', fl.error ? 'warn' : '') : null,
+      mode === 'eeg' ? line('Model', !b.connected ? '–' : sc.active === 'model' ? (sc.model_file || '').split(/[\\/]/).pop()
+        : sc.active === 'adaptive' ? 'calibrated on this session' : `none yet: adapts after ${sc.adaptive_needs || '5 trials'}`,
+        sc.model_filter_mismatch || sc.model_error ? 'warn' : sc.active === 'model' ? 'good' : '') : null,
+      sc.model_filter_mismatch ? h('div', { class: 'warn small' }, `Model ${sc.model_filter_mismatch}`) : null,
+      mode === 'mock' ? h('div', { class: 'warn small' }, 'Mock predictions use the true answer: fine for rehearsing, not evidence.') : null);
+    [...agentBody.childNodes].forEach((n) => { if (n.nodeType === 3 && n.textContent === 'null') n.remove(); });
+  }
+
+  // the headset card can report a stream synchronously (bridge already connected), so it comes after the Agent card
+  const whoCard = participantCard();
+  const headset = headsetCard(app, { onFirstStream: (eeg) => {
+    const dev = whoCard.autofillDevice(eeg);
+    const live = autoLiveEeg();
+    if (live) { updateAgent(); }
+    const bits = [dev && `device = ${dev}`, live && 'predictor = Live EEG'].filter(Boolean);
+    return bits.length ? `Auto-filled: ${bits.join(', ')}.` : null;
+  } });
+  // ---------- readiness: shown next to Start ----------
+  const rig = h('div', { class: 'rigstrip' });
   function updateRig() {
     const p = loadParticipant(), cur = loadSettings(), b = app.bridge.status(), eeg = b.eeg || {};
-    const chip = (ok, text) => h('span', { class: `rigchip ${ok === true ? 'ok' : ok === false ? 'bad' : 'warn'}` }, text);
+    const chip = (ok, text, go) => h('button', { type: 'button', class: `rigchip ${ok === true ? 'ok' : ok === false ? 'bad' : 'warn'}`, onclick: go }, text);
+    const toCard = (id) => () => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const q = eeg.quality || [];
     const bad = q.filter((x) => x.status !== 'good').length;
     rig.replaceChildren(
-      chip(!!p.participant, p.participant ? `Participant ${p.participant}` : 'No participant ID'),
-      chip(!!p.device, p.device || 'No device chosen'),
+      chip(!!p.participant, p.participant ? `Participant ${p.participant}` : 'No participant ID', () => { toCard('participant')(); whoCard.focus(); }),
+      chip(!!p.device, p.device || 'No device chosen', toCard('participant')),
       chip(!b.connected ? false : eeg.found ? (bad ? null : true) : (cur.predictor_mode === 'eeg' ? false : null),
-        !b.connected ? 'Bridge offline' : eeg.found ? `Headset${eeg.simulated ? ' (SIMULATED)' : ''}: ${bad ? bad + ' electrode(s) need attention' : 'all electrodes good'}` : 'No headset stream'),
-      chip(cur.predictor_mode === 'off' ? null : true, `Predictor: ${({ eeg: 'Live EEG', mock: 'Mock', ws: 'Model server', off: 'Off' })[cur.predictor_mode] || cur.predictor_mode}`),
-      h('a', { class: 'btn small', href: '#/setup' }, 'Change in Setup'));
+        !b.connected ? 'Bridge offline' : eeg.found ? `Headset${eeg.simulated ? ' (SIMULATED)' : ''}: ${bad ? bad + ' electrode(s) need attention' : 'all electrodes good'}` : 'No headset stream', toCard('headset')),
+      chip(cur.predictor_mode === 'off' || cur.predictor_mode === 'mock' ? null : (eeg.scorer?.model_filter_mismatch ? null : true),
+        `Agent: ${predictorName(cur.predictor_mode)}`, () => { location.hash = '#/agent'; }));
   }
-  const offRig = app.bridge.onChange(updateRig);
-  updateRig();
+  const tick = () => { updateRig(); updateAgent(); };
+  const offRig = app.bridge.onChange(tick);
+  const rigTimer = setInterval(tick, 1500);     // participant / device edits happen on this page
+  tick();
 
+  const lab = [hardwareCard(), storageCard()];
+  const section = (id, title, hint) => h('div', { class: 'section-title', id }, h('h2', {}, title), hint ? h('span', { class: 'muted small' }, hint) : null);
+  const jump = (id, label) => h('button', { type: 'button', class: 'jump', onclick: () => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, label);
   const startBtn = h('button', { class: 'btn primary', onclick: start }, 'Start session');
-  const resetBtn = h('button', { class: 'btn', type: 'button', onclick: resetDefaults }, 'Reset experiment settings');
-  root.append(subTabs('configure'), h('h1', {}, 'Experiment'), rig,
-    h('div', { class: 'grid2' }, presetCard, typeCard, stimCard, designCard, planCard, flashCard, seqCard, voiceCard, respCard),
-    h('div', { class: 'startbar' }, startBtn, resetBtn, err));
+  const resetBtn = h('button', { class: 'btn', type: 'button', onclick: resetDefaults, title: 'Experiment design only: participant, headset, storage and Agent settings are kept' }, 'Reset design');
+  root.append(subTabs('configure'),
+    h('div', { class: 'exp-head' }, h('h1', {}, 'Experiment'),
+      h('nav', { class: 'jumps', 'aria-label': 'Sections' }, jump('sec-who', 'Participant & headset'), jump('sec-design', 'Design'),
+        jump('sec-questions', 'Questions'), jump('sec-lab', 'Lab & data'))),
+    section('sec-who', '1 · Participant & headset', 'check every electrode is green before you start'),
+    h('div', { class: 'grid2' }, headset.el, whoCard.el, agentCard),
+    section('sec-design', '2 · Design', 'saved as you type; presets hold all of this'),
+    h('div', { class: 'grid2' }, presetCard, typeCard, stimCard, designCard, flashCard, seqCard, voiceCard, respCard),
+    section('sec-questions', '3 · Questions & image order'),
+    h('div', { class: 'grid2' }, planCard),
+    section('sec-lab', '4 · Lab & data', 'this computer: display timing and where recordings go'),
+    h('div', { class: 'grid2' }, ...lab.map((c) => c.el)),
+    h('div', { class: 'startbar' }, startBtn, resetBtn, rig, err));
 
   function read() {
     const out = { ...loadSettings() };
@@ -365,21 +414,22 @@ export async function renderExperiment(root, app) {
   await refreshSources();
   await loadChosen();
   renderPlan();
-  return () => { offRig(); };
+  return () => { offRig(); clearInterval(rigTimer); headset.dispose(); };
 
   async function start() {
     err.textContent = '';
     const cur = read();
     const who = loadParticipant();
     const pid = (who.participant || '').trim();
-    if (!pid) { err.replaceChildren('Enter a participant ID in ', h('a', { href: '#/setup' }, 'Setup'), ' first.'); return; }
-    if (!who.device) { err.replaceChildren('Choose the recording device in ', h('a', { href: '#/setup' }, 'Setup'), ' first.'); return; }
+    const toWho = () => { document.getElementById('participant')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); whoCard.focus(); };
+    if (!pid) { err.textContent = 'Enter a participant ID first (section 1).'; toWho(); return; }
+    if (!who.device) { err.textContent = 'Choose the recording device first (section 1).'; toWho(); return; }
     if (!stimuli) { err.textContent = 'The stimulus set could not be loaded.'; return; }
     if (cur.off_max_ms < cur.off_min_ms) { err.textContent = 'Gap max must be ≥ gap min.'; return; }
     if (cur.options_per_trial > stimuli.items.length) { err.textContent = 'More options per question than stimulus items.'; return; }
-    if (cur.predictor_mode === 'eeg' && !(app.bridge.status().eeg || {}).found) { err.textContent = 'Predictor is Live EEG but no headset stream is reaching the bridge. Start eeg/stream_eeg.py, or choose Mock under Setup → Prediction.'; return; }
+    if (cur.predictor_mode === 'eeg' && !(app.bridge.status().eeg || {}).found) { err.replaceChildren('Predictor is Live EEG but no headset stream is reaching the bridge. Start eeg/stream_eeg.py, or choose Mock on the ', h('a', { href: '#/agent/output' }, 'Agent tab'), '.'); return; }
     if (cur.trial_type === 'mcq_sequential' && cur.show_model_probs && cur.predictor_mode === 'off') { err.textContent = 'Model probabilities need a predictor: choose Mock or WebSocket, or untick "Show model probability".'; return; }
-    if (cur.narrate !== 'off' && cur.predictor_mode === 'off') { err.textContent = 'The narrator announces the model’s guess, so it needs a predictor: choose one under Setup → Prediction, or turn the narrator off.'; return; }
+    if (cur.narrate !== 'off' && cur.predictor_mode === 'off') { err.replaceChildren('The narrator announces the model’s guess, so it needs a predictor: choose one on the ', h('a', { href: '#/agent/output' }, 'Agent tab'), ', or turn the narrator off.'); return; }
     try { await db.getAll('sessions'); } catch (e) { err.textContent = 'Local storage (IndexedDB) is unavailable: ' + e.message; return; }
     saveSettings(cur);
     saveParticipant({ ...who, notes: '' });   // notes belong to one session; the participant and device carry over

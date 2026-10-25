@@ -1,7 +1,7 @@
 // App shell: hash router, shared singletons (bridge, markers), Researcher/Demo mode toggle.
 import { BridgeClient } from './bridgeClient.js';
 import { MarkerBus } from './markers.js';
-import { renderSetup } from './views/setup.js';
+import { renderAgent } from './views/agent.js';
 import { renderExperiment } from './views/experiment.js';
 import { renderTiming } from './views/timing.js';
 import { renderRun } from './views/run.js';
@@ -45,7 +45,11 @@ function topStatus() {
 }
 
 async function route(force = false) {
-  const hash = location.hash || '#/setup';
+  // #/setup was merged into the Experiment tab (participant, headset, storage) and the Agent tab (model, voice)
+  if (!location.hash || location.hash === '#/' || location.hash.startsWith('#/setup')) {
+    history.replaceState(null, '', '#/experiment');
+  }
+  const hash = location.hash;
   if (!force && hash === currentHash && view.childElementCount) return;
   // Leaving a running session: confirm first.
   if (app.runner && app.runner.phase !== 'finished' && !hash.startsWith('#/run') && currentHash && currentHash.startsWith('#/run')) {
@@ -61,9 +65,9 @@ async function route(force = false) {
   currentHash = hash;
   view.replaceChildren();
   const [, name, arg] = hash.split('/');
-  document.body.dataset.route = name || 'setup';
+  document.body.dataset.route = name || 'experiment';
   // sessions, run, review and summary are all part of the Experiment tab
-  const section = { brain: 'eeg', sessions: 'experiment', library: 'experiment', run: 'experiment', review: 'experiment', summary: 'experiment' }[name] || name || 'setup';
+  const section = { brain: 'eeg', sessions: 'experiment', library: 'experiment', run: 'experiment', review: 'experiment', summary: 'experiment' }[name] || name || 'experiment';
   document.querySelectorAll('#topbar nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === section));
   try {
     if (name === 'run') cleanup = renderRun(view, app);
@@ -73,8 +77,8 @@ async function route(force = false) {
     else if (name === 'library') cleanup = await renderLibrary(view, app);
     else if (name === 'eeg' || name === 'brain') cleanup = renderEeg(view, app);
     else if (name === 'timing') cleanup = renderTiming(view, app);
-    else if (name === 'experiment') cleanup = await renderExperiment(view, app);
-    else cleanup = await renderSetup(view, app);
+    else if (name === 'agent') cleanup = await renderAgent(view, app, arg ? decodeURIComponent(arg) : null);
+    else cleanup = await renderExperiment(view, app);
   } catch (e) {
     console.error(e);
     view.replaceChildren(h('div', { class: 'card' }, h('h2', { class: 'bad' }, 'Something went wrong'), h('pre', { class: 'mono' }, String(e.stack || e))));
