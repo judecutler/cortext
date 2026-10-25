@@ -15,6 +15,14 @@ never touch the same file, and there is no shared index file to conflict on.
 
 Raw EEG is large, so teammates normally download only the small `epochs.npz` files (`pull`) and fetch everything with `pull --all`.
 
+**Plain voltage tables.** Each upload also puts `voltages/<session_id>_raw.csv.gz` in the repo: one row per sample with
+the time, every electrode's voltage (µV) and the on-screen event, for analysis without our loader (columns explained in the
+dataset card). About 5 MB per 10 minutes. It duplicates `eeg_raw.npz` on purpose; turn it off with
+`"upload_voltages": false` in `dataset.json`, or switch to the filtered signal with `"voltage_signal": "clean"`.
+Sessions uploaded before this existed: `python datasets/cortext-p300/cortext_store.py voltages` (needs their
+`eeg_raw.npz` locally: `pull --all` first). Download them with `pull --voltages`, or from the repo's `voltages/` folder
+on huggingface.co. Deleting a session deletes its voltage table too.
+
 ## What you need to do (once)
 
 1. Make a Hugging Face account (free) at huggingface.co. For a team, create an **organization** and invite teammates (write access for recorders, read for others).

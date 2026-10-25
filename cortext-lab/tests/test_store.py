@@ -44,9 +44,11 @@ def make_session(sid, simulated=False, raw=True, participant="P01"):
                         flash_index=np.arange(n, dtype=np.int16), mode=np.array(["flash"] * n), trial_valid=np.ones(n, bool),
                         rejected_artifact=np.zeros(n, bool), clicked_option_id=np.array(["a"] * n), onset_lsl=np.arange(n, dtype=float),
                         session_id=np.array([sid] * n))
-    np.savez_compressed(d / "eeg_clean.npz", data=np.zeros((2, 10), np.float32))
+    t = 100 + np.arange(10) / 250
+    np.savez_compressed(d / "eeg_clean.npz", data=np.zeros((2, 10), np.float32), times=t, srate=250, labels=np.array(["Fz", "Pz"]))
     if raw:
-        np.savez_compressed(d / "eeg_raw.npz", data=np.zeros((2, 10), np.float32))
+        np.savez_compressed(d / "eeg_raw.npz", data=np.arange(20, dtype=np.float32).reshape(2, 10) * 1.234, times=t, srate=250,
+                            labels=np.array(["Fz", "Pz"]))
     return d
 
 
@@ -80,6 +82,10 @@ class FakeApi:
             self.repo[f"{path_in_repo}/{f.name}"] = f.read_bytes()
         self.calls.append(("upload_folder", path_in_repo))
         return types.SimpleNamespace(oid="deadbeef")
+
+    def delete_file(self, path_in_repo, repo_id, repo_type=None, commit_message=None):
+        del self.repo[path_in_repo]
+        self.calls.append(("delete_file", path_in_repo))
 
     def list_repo_files(self, repo_id, repo_type=None):
         return sorted(self.repo)
@@ -163,6 +169,32 @@ def main():
     assert [x["ok"] for x in res] == [True] and store.pending_uploads() == []
     print("push: ok (uploaded, recorded in sync_state.json, pending list shrinks)")
 
+    # ---- voltage tables: uploaded with each session into voltages/, one CSV row per sample
+    import gzip
+    assert r["voltages"]["ok"] and r["voltages"]["path_in_repo"] == f"voltages/{a}_raw.csv.gz", r["voltages"]
+    assert f"voltages/{b}_raw.csv.gz" in FakeApi.repo
+    rows_v = gzip.decompress(FakeApi.repo[f"voltages/{a}_raw.csv.gz"]).decode().splitlines()
+    assert rows_v[0] == "time_s,lsl_time,Fz_uV,Pz_uV,event" and len(rows_v) == 11, rows_v[:2]
+    assert rows_v[1].startswith("0.0000,100.000000,0.00,12.34,") and rows_v[2].startswith("0.0040,100.004000,1.23,"), rows_v[1:3]
+    (ROOT / "sessions" / a / "events.csv").write_text("lsl_time,event,option_id,is_target\n100.0121,flash_on,dog,1\n100.0119,trial_start,,\nbad,x,,\n")
+    v = store.export_voltages(a)
+    lines = gzip.open(v["path"]).read().decode().splitlines()
+    assert lines[4].endswith(",flash_on option=dog target=1 | trial_start") and v["events"] == 2, lines[4]   # nearest sample (100.012)
+    assert store.export_voltages(a, signal="clean")["channels"] == ["Fz", "Pz"]
+    try:
+        store.export_voltages(sim)
+        store.push_voltages(sim)
+        raise AssertionError("simulated voltage tables must not be uploaded")
+    except store.StorageError:
+        pass
+    os.remove(ROOT / "sessions" / b / "eeg_raw.npz")
+    rb = store.push_session(b)
+    assert rb["voltages"]["ok"] is False and "pull --all" in rb["voltages"]["error"], rb   # reported, session still uploaded
+    make_session_raw = np.savez_compressed  # restore b's raw file for later steps
+    make_session_raw(ROOT / "sessions" / b / "eeg_raw.npz", data=np.zeros((2, 10), np.float32), times=100 + np.arange(10) / 250,
+                     srate=250, labels=np.array(["Fz", "Pz"]))
+    print("voltages: ok (CSV in voltages/, time + one column per electrode + markers, missing raw reported not raised)")
+
     # a rebuilt session replaces the old files remotely instead of leaving stale ones
     (ROOT / "sessions" / a / "eeg_clean.npz").unlink()
     store.push_session(a)
@@ -185,6 +217,8 @@ def main():
     assert store.pending_uploads(other) == []     # downloaded sessions are not "pending upload"
     store.pull([a], profile="all", root=other)
     assert (other / "sessions" / a / "eeg_raw.npz").exists()
+    store.pull([a], root=other, voltages=True)
+    assert (other / "voltages" / f"{a}_raw.csv.gz").exists() and not (other / "voltages" / f"{b}_raw.csv.gz").exists()
     print("pull: ok (epochs-only by default, raw on request, nothing re-uploaded)")
 
     # ---- delete: local + logs
@@ -196,17 +230,20 @@ def main():
     assert any(b in f for f in os.listdir(LOGS)), "another session's logs must be untouched"
     assert (ROOT / "sessions" / b).exists()
     assert a not in store.load_sync_state(ROOT) and a not in (ROOT / "index.csv").read_text()
+    assert not any(ROOT.joinpath("voltages").glob(f"{a}_*")), "local voltage tables go with the session"
     assert f"sessions/{a}/epochs.npz" in FakeApi.repo, "local-only delete must not touch the server"
     print("delete (local): ok (dataset folder, raw logs, adaptive model, sync entry, index row; neighbours untouched)")
 
     # ---- delete: remote, with purge of stored files
-    FakeApi.lfs = [f"sessions/{a}/eeg_raw.npz", f"sessions/{a}/epochs.npz", f"sessions/{b}/eeg_raw.npz"]
+    FakeApi.lfs = [f"sessions/{a}/eeg_raw.npz", f"sessions/{a}/epochs.npz", f"sessions/{b}/eeg_raw.npz", f"voltages/{b}_raw.csv.gz"]
+    assert f"voltages/{b}_raw.csv.gz" in FakeApi.repo
     rep = store.delete_session(b, log_dir=str(LOGS), remote=True)
-    assert rep["ok"] and rep["remote"]["deleted"] and rep["remote"]["purged_files"] == 1, rep
+    assert rep["ok"] and rep["remote"]["deleted"] and rep["remote"]["purged_files"] == 2, rep
+    assert not any(k.startswith(f"voltages/{b}_") for k in FakeApi.repo) and f"voltages/{a}_raw.csv.gz" in FakeApi.repo
     assert not any(k.startswith(f"sessions/{b}/") for k in FakeApi.repo)
     assert any(k.startswith(f"sessions/{a}/") for k in FakeApi.repo)
     assert FakeApi.lfs == [f"sessions/{a}/eeg_raw.npz", f"sessions/{a}/epochs.npz"], "only this session's stored files are purged"
-    assert ("purge", [f"sessions/{b}/eeg_raw.npz"], True) in FakeApi.calls
+    assert ("purge", sorted([f"sessions/{b}/eeg_raw.npz", f"voltages/{b}_raw.csv.gz"]), True) in FakeApi.calls
     print("delete (remote): ok (folder removed, only this session's stored files purged from history)")
 
     # remote delete of something that is not there is fine; a failing purge is reported honestly, not hidden
@@ -225,12 +262,14 @@ def main():
     except store.StorageError as exc:
         assert "dataset" in str(exc).lower() or "not in" in str(exc)
     os.environ["CORTEXT_HF_REPO"] = ""
+    real_cfg, store.CONFIG_FILE = store.CONFIG_FILE, Path(TMP) / "no-dataset.json"   # the repo's dataset.json now names a repo
     assert store.hf_status()["configured"] is False
     try:
         store._api_and_repo()
         raise AssertionError("should need a repo")
     except store.StorageError as exc:
         assert "dataset.json" in str(exc)
+    store.CONFIG_FILE = real_cfg
     print("config errors: ok")
 
     # ---- migration from the old in-repo folder
