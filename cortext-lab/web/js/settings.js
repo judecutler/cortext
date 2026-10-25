@@ -1,13 +1,13 @@
 // Session settings: defaults, persistence of the last-used values, and a derived-duration helper.
 
 export const DEFAULT_SETTINGS = {
-  trial_type: 'mcq_flash',         // mcq_flash (options flash in place) | mcq_sequential (one at a time, then choose)
+  trial_type: 'mcq_sequential',    // mcq_sequential (one at a time, then choose: the demo) | mcq_flash (options flash in place)
   stimuli_source: 'path',          // 'path' (stimuli_url below) or 'set:<name>' (an uploaded set)
   stimuli_url: 'config/stimuli.json',
   n_trials: 12,
   options_per_trial: 4,
   tile_content: 'image_text',      // image | text | image_text (what each stimulus shows, in both modes)
-  prompt_ms: 2000,                 // question shown before anything else happens
+  prompt_ms: 5000,                 // question shown before anything else happens (5 s: time to read it and pick the target)
   imagery_ms: 0,                   // 0 = off. >0: after the prompt, a dark screen with a fixation cross for this long while the
                                    // participant pictures the answer (imagery_on / imagery_off markers), then IMAGERY_SETTLE_MS
                                    // with the options back on screen before the first flash
@@ -19,7 +19,7 @@ export const DEFAULT_SETTINGS = {
   // --- sequential mode ---
   seq_on_ms: 1000,                 // each option's media on screen alone
   seq_gap_ms: 300,                 // blank gap between options (question stays)
-  seq_repeats: 1,                  // times each option is shown per trial
+  seq_repeats: 3,                  // times each option is shown per trial (3: three P300s per answer to add up; 1 is too weak)
   show_model_probs: true,          // show the model's probability on every choice before the click
   send_feedback: false,            // after each trial send the answer back to the ws model server (opt-in)
   // --- common ---
@@ -30,7 +30,7 @@ export const DEFAULT_SETTINGS = {
   log_flash_off: true,             // also emit flash_off markers
   photodiode: false,
   photodiode_corner: 'bottom-left',
-  predictor_mode: 'mock',          // off | mock | ws
+  predictor_mode: 'eeg',           // eeg (headset -> bridge P300 scorer: the demo) | mock (simulated, uses ground truth) | ws | off
   predictor_url: 'ws://localhost:8765',
   show_bars: false,                // live score bars under tiles (flash mode, demo only)
   use_plan: false,                 // true: run the question list from the Experiment tab instead of generating questions
@@ -38,9 +38,9 @@ export const DEFAULT_SETTINGS = {
   order_mode: 'random',            // random | fixed: in a custom list, shuffle option order per trial or keep the listed order
   // --- voice & audio (demo) ---
   voice_on: false,                 // demo: read the question aloud AND say each option's name as it appears (sets speak_question + audiovisual at Start)
-  speak_question: false,           // read the question aloud before the stimuli (the stimuli wait until it has finished)
+  speak_question: true,            // read the question aloud before the stimuli (the stimuli wait until it has finished)
   stim_modality: 'visual',         // visual | audio (spoken options, no visual change) | audiovisual (both together)
-  narrate: 'off',                  // off | after_click (narrator announces the model's guess after the answer) | before_click
+  narrate: 'before_click',         // off | after_click | before_click (demo: narrator announces the model's guess, then the click)
   narrator_llm: 'template',        // template (built in, offline) | ollama | openai | anthropic  (LLMs go through the bridge)
   narrator_mood: 'default',        // a NARRATOR_MOODS preset, or 'custom'
   narrator_context: '',            // the LLM's persona / mood / experiment context; '' = the chosen mood's text
@@ -50,6 +50,14 @@ export const DEFAULT_SETTINGS = {
   tts_rate: 1,
   seed: null,
 };
+
+/** The hackathon demo flow (question read aloud, options one at a time x3, live EEG scorer, narrator before the click).
+ *  Applied once to browsers that saved settings before it became the default; "Reset to demo defaults" re-applies it. */
+export const DEMO_DEFAULTS = {
+  trial_type: 'mcq_sequential', prompt_ms: 5000, seq_on_ms: 1000, seq_gap_ms: 300, seq_repeats: 3, show_model_probs: true,
+  predictor_mode: 'eeg', speak_question: true, narrate: 'before_click', imagery_ms: 0,
+};
+const DEFAULTS_REV = 3;
 
 /** After the imagery window the options come back on screen; wait this long before the first flash so their onset
  *  response does not land in the first flash epochs. */
@@ -63,11 +71,14 @@ export function loadSettings() {
     if ((saved._defaults_rev || 0) < 2) {   // 2026-10-25: random question and image order became the default
       saved.shuffle_on_start = true; saved.order_mode = 'random'; saved._defaults_rev = 2;
     }
+    if ((saved._defaults_rev || 0) < 3) {   // 2026-10-25 (showtime): the demo flow became the default, once, on every browser
+      Object.assign(saved, DEMO_DEFAULTS); saved._defaults_rev = 3;
+    }
     return { ...DEFAULT_SETTINGS, ...saved, seed: null };
   } catch { return { ...DEFAULT_SETTINGS }; }
 }
 export function saveSettings(s) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify({ ...s, seed: null, _defaults_rev: 2 })); } catch { /* ignore */ }
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ ...s, seed: null, _defaults_rev: DEFAULTS_REV })); } catch { /* ignore */ }
 }
 
 /** The on/gap/repeat timing that applies to a given trial type (used for records and estimates). */

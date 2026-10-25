@@ -20,6 +20,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_models import make_model  # noqa: E402
+import pw_helpers  # noqa: E402,F401  (old test defaults: flash mode + mock predictor)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 9600 + os.getpid() % 90

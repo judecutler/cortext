@@ -42,3 +42,15 @@ export const storageInfo = (check = false) => get(`/api/storage${check ? '?check
 export const uploadPending = () => post('/api/storage/push-pending');
 export const downloadFromHub = (profile = 'epochs') => post('/api/storage/pull', { profile });
 export const createHubRepo = () => post('/api/storage/init');
+
+// ---- raw EEG (raw_eeg/ on Hugging Face): free recordings with no stimuli, or files recorded with another program ----
+export const rawEegInfo = () => get('/api/storage/raw');
+export const startRawRecording = (participant, note) => post('/api/storage/raw/start', { participant, note });
+export const stopRawRecording = (upload = true) => post('/api/storage/raw/stop', { upload });
+export const pushRawFile = (name) => post('/api/storage/raw/push', { name });
+/** Upload a file picked in the browser, untouched. */
+export async function uploadRawFile(file, { note = '', participant = '' } = {}) {
+  const q = new URLSearchParams({ name: file.name, note, participant });
+  const r = await fetch(`/api/storage/raw-upload?${q}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+  try { return await r.json(); } catch { return { ok: false, error: `HTTP ${r.status}` }; }
+}

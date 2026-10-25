@@ -59,6 +59,7 @@ export function narrationFacts({ trial, pred, name = '', when = 'after_click', m
     runner_up_label: ru ? ru.label : null,
     runner_up_percent: ru ? Math.round(ranked[0][1] * 100) : null,
     simulated: pred.source === 'mock' || !!pred.simulated,
+    mock: pred.source === 'mock',   // simulated from the true answer (vs. a real scorer on SIMULATED EEG)
     modality,
   };
   if (when === 'after_click' && trial.clicked_answer_id) {
@@ -85,23 +86,25 @@ export function templateNarration(f, rng = Math.random, { plain = false } = {}) 
   const L = f.guess_letter, lab = f.guess_label, p = f.confidence_percent ?? '?';
   let line;
   if (f.simulated) {
-    line = `Simulation only, not a real brain reading: the mock model is about ${p}% sure on option ${L}, the ${lab}.`;
+    line = f.mock === false
+      ? `Simulated EEG, not a real brain reading: on the simulated brain waves the model is about ${p}% sure on option ${L}, the ${lab}.`
+      : `Simulation only, not a real brain reading: the mock model is about ${p}% sure on option ${L}, the ${lab}.`;
   } else if (p !== '?' && p >= 70) {
     line = pick([
-      `Hmm... based on the brain patterns, I'm about ${p}% sure ${subj} ${verb} the ${lab} at option ${L}. So that's probably the answer.`,
-      `Okay... ${poss} brain really reacted to option ${L}. I'm about ${p}% sure it's the ${lab}.`,
-      `Hmm... that's a strong response. About ${p}% says ${subj} ${verb} the ${lab}, option ${L}.`,
+      `Based on ${poss} brain waves, I'm thinking answer ${L} is the ${lab}. I'm about ${p}% sure.`,
+      `Okay... ${poss} brain really reacted to option ${L}. Based on those brain waves, I'm about ${p}% sure it's the ${lab}.`,
+      `That's a strong response. Based on ${poss} brain waves, I'm thinking answer ${L}, the ${lab}, at about ${p}%.`,
     ], rng);
   } else if (p !== '?' && p >= 40) {
     line = pick([
-      `Hmm... the signal leans toward option ${L}, the ${lab}, at about ${p}%.`,
-      `Okay, I'm seeing a lean: option ${L}, the ${lab}, at about ${p}%.`,
+      `Based on ${poss} brain waves, I'm thinking answer ${L} is the ${lab}, at about ${p}%.`,
+      `Hmm... based on ${poss} brain waves, I'm leaning toward answer ${L}, the ${lab}, at about ${p}%.`,
     ], rng);
     if (f.runner_up_label && f.runner_up_percent >= 20) line += ` But the ${f.runner_up_label} at ${f.runner_up_percent}% isn't out of it yet.`;
   } else {
     line = pick([
-      `Hmm, this one's tricky. My best guess is option ${L}, the ${lab}, but only about ${p}%.`,
-      `Honestly? ${cap(poss)} brain is keeping its secrets. Option ${L}, the ${lab}, edges ahead at just ${p}%.`,
+      `Hmm, this one's tricky. Based on ${poss} brain waves, my best guess is answer ${L}, the ${lab}, but only about ${p}%.`,
+      `Honestly? ${cap(poss)} brain is keeping its secrets. Answer ${L}, the ${lab}, edges ahead at just ${p}%.`,
     ], rng);
   }
   if (f.click_matches_guess === true) line += ` And ${subj} picked ${L} too. Brain and hand agree!`;
@@ -192,8 +195,12 @@ export class Voice {
           const j = await r.json().catch(() => ({}));
           this.lastServerError = j.error || `HTTP ${r.status}`;
           if (r.status === 503 && /no TTS engine/.test(this.lastServerError)) this.serverTts = false;
+          // a bridge voice that keeps failing (e.g. pyttsx3 installed but no OS speech engine) would cost a round trip
+          // and a console error on every line: after 3 failures in a row use the browser's voice for the rest of the page
+          if ((this._ttsFails = (this._ttsFails || 0) + 1) >= 3) this.serverTts = false;
           return null;
         }
+        this._ttsFails = 0;
         return this._decode(await r.arrayBuffer(), r.headers.get('X-TTS-Engine') || 'server');
       }).catch((e) => { this.lastServerError = e.name === 'AbortError' ? 'bridge voice took over 9 s' : String(e.message || e); return null; })
         .finally(() => clearTimeout(timer));

@@ -54,7 +54,7 @@ def status():
 def main():
     fake = subprocess.Popen([sys.executable, os.path.join(ROOT, "eeg", "fake_eeg.py"), "--seed", "3", "--p300-uv", "6"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    bridge = subprocess.Popen([sys.executable, os.path.join(ROOT, "bridge", "bridge.py"), "--port", str(PORT)],
+    bridge = subprocess.Popen([sys.executable, os.path.join(ROOT, "bridge", "bridge.py"), "--port", str(PORT), "--p300-model", "none"],  # tests the heuristic -> adaptive path, not models/active/
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for _ in range(100):

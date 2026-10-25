@@ -34,6 +34,16 @@ Hotkeys (run view): `Space`/`Enter` next/start · `Backspace` discard · `R` red
 `P` pause · `M` Researcher/Demo mode · `V` voice on/off (if "Voice on (demo)" was ticked at Start) · `I` info panel · `Shift+F` fullscreen · `Shift+B` live score bars · `N` next session
 (on the end screen). Everywhere: `Ctrl/⌘+Z` undo, `Ctrl/⌘+Shift+Z` (or `Ctrl+Y`) redo.
 
+## Defaults = the demo (2026-10-25)
+
+A fresh browser (and, once, every browser that saved older settings) starts with the hackathon demo flow: **one at a
+time, then choose** · question shown 5 s and **read aloud** · each picture 1 s, 0.3 s gap, **3 rounds** · Predictor
+**Live EEG** · **narrator before the click** ("Based on Jude's brain waves, I'm thinking answer B is the dog… about 45%").
+`models/active/` ships with the **p3000 function**, so the live decoder works from trial 1 with no calibration; pick a
+calibrated model in Agent → Model when you have one. Start is refused (with a message) until a headset stream reaches
+the bridge; for testing without a headset run `eeg/fake_eeg.py`, or choose Mock on the Agent tab. "Reset design" on the
+Experiment tab returns the design to these values (predictor and narrator are on the Agent tab). `tests/e2e_showtime.py` runs exactly this flow from a fresh browser.
+
 ## Live EEG, cleaning and the shared dataset
 
 See [`../docs/DATA_COLLECTION.md`](../docs/DATA_COLLECTION.md) and [`../docs/DATA_STORAGE.md`](../docs/DATA_STORAGE.md). In short:
@@ -55,6 +65,11 @@ See [`../docs/DATA_COLLECTION.md`](../docs/DATA_COLLECTION.md) and [`../docs/DAT
     See [`filters/README.md`](filters/README.md).
 - At session end, `pipeline/build_session.py` cleans the EEG and writes `data/cortext-p300/sessions/<id>/`
   (git-ignored). Upload sends only that folder to the private Hugging Face dataset (button, or automatic: Experiment → Lab & data).
+- **Raw EEG → Hugging Face** (Experiment → Lab & data): *Record raw EEG* captures the headset stream with no stimuli
+  (every sample: `unix_time`, `lsl_time`, one µV column per electrode) and *Stop & upload* puts it in the dataset's
+  `raw_eeg/` folder; *Upload a raw EEG file…* sends any file from another recorder there untouched (CSV, XDF, EDF, FIF…).
+  Command line: `python datasets/cortext-p300/cortext_store.py raw FILE --participant P01 --note "…"`. Simulated
+  recordings stay on this computer.
 - The **EEG** tab (`#/eeg`) is the neural monitor: scalp map, region band power, live traces, P300 waveform and answer evidence. It is
   for the audience on a second screen, never for the participant during flashing.
 - Each browser tab keeps its own clock offset in the bridge. Opening the monitor in a second tab must not (and no longer
@@ -130,10 +145,10 @@ part-way and starts it again from question 1 (same as Redo). The mark travels in
 Pick one under **Experiment → Design → Presentation mode**. Both write the same marker schema and the same exports, so the same
 epoching/detector code works for either. "What each stimulus shows" (image / text / image + text) applies to both.
 
-| | **Flash options in place** (original) | **One at a time, then choose** (new) |
+| | **Flash options in place** (original) | **One at a time, then choose** (the demo; default) |
 |---|---|---|
-| `trial_type` | `mcq_flash` | `mcq_sequential` |
-| During the EEG phase | all answer tiles stay visible; one lights up at a time (500 ms on, 100–200 ms gap, 10 repeats) | the **question stays on screen**; each option's picture/text appears **alone** for 1 s (default), 0.3 s gap, once per option (default; repeats configurable) |
+| `trial_type` | `mcq_flash` | `mcq_sequential` (**default**) |
+| During the EEG phase | all answer tiles stay visible; one lights up at a time (500 ms on, 100–200 ms gap, 10 repeats) | the **question stays on screen**; each option's picture/text appears **alone** for 1 s (default), 0.3 s gap, 3 rounds (default; configurable) |
 | After it | tiles freeze, click your answer | the full multiple-choice grid appears with **the model's probability on every choice**, then you click the correct one |
 | Marker event for each onset | `flash_on` (`extra.mode: "flash"`) | `flash_on` (`extra.mode: "sequential"`) so it epochs identically |
 

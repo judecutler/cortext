@@ -323,7 +323,7 @@ def build(session_id, trials=None, session=None, out_root=None, log_dir=LOG_DIR,
                             session_id=np.array([str(session_id)] * len(imag["X"])))
     with open(os.path.join(tmp, "events.csv"), "w", newline="", encoding="utf-8") as fh:
         keys = ["lsl_time", "sample", "event", "trial_id", "trial_index", "option_id", "option_position", "category",
-                "is_target", "repeat_index", "flash_index", "true_answer_id", "extra"]
+                "is_target", "repeat_index", "flash_index", "true_answer_id", "extra", "wall_ms"]
         w = csv.DictWriter(fh, fieldnames=keys, extrasaction="ignore")
         w.writeheader()
         for m in markers:

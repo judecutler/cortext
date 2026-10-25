@@ -72,7 +72,7 @@ class FakeApi:
         self.calls.append(("create_repo", repo_id, repo_type, private, exist_ok))
 
     def upload_file(self, path_or_fileobj, path_in_repo, repo_id, repo_type=None, commit_message=None):
-        self.repo[path_in_repo] = Path(path_or_fileobj).read_bytes()
+        self.repo[path_in_repo] = path_or_fileobj if isinstance(path_or_fileobj, bytes) else Path(path_or_fileobj).read_bytes()
 
     def upload_folder(self, repo_id, folder_path, path_in_repo, repo_type=None, commit_message=None, delete_patterns=None):
         assert repo_type == "dataset" and delete_patterns == "*"
@@ -194,6 +194,45 @@ def main():
     make_session_raw(ROOT / "sessions" / b / "eeg_raw.npz", data=np.zeros((2, 10), np.float32), times=100 + np.arange(10) / 250,
                      srate=250, labels=np.array(["Fz", "Pz"]))
     print("voltages: ok (CSV in voltages/, time + one column per electrode + markers, missing raw reported not raised)")
+
+    # absolute time: markers that carry the page's wall clock give every sample a unix_time
+    (ROOT / "sessions" / a / "events.csv").write_text("lsl_time,event,option_id,is_target,wall_ms\n100.0121,flash_on,dog,1,1761410000012.1\n")
+    v = store.export_voltages(a)
+    lines = gzip.open(v["path"]).read().decode().splitlines()
+    assert lines[0] == "time_s,lsl_time,unix_time,Fz_uV,Pz_uV,event", lines[0]
+    assert lines[1].split(",")[2] == "1761410000.000" and abs(v["unix_start"] - 1761410000.0) < 1e-3, (lines[1], v)
+    print("voltages unix_time: ok (absolute time from the markers' wall clock)")
+
+    # ---- raw_eeg/: files from any recorder, untouched, timestamped name + .json sidecar
+    rawf = Path(TMP) / "my recording (eyes closed).csv"
+    rawf.write_text("lsl_time,page_t_ms,Fz,Pz\n10.0,,1.5,2.5\n10.004,,1.6,2.4\nbad,,x,y\n")
+    up = store.push_raw_eeg(rawf, note="eyes closed", participant="P01", stamp="20261025-120000")
+    assert up["path_in_repo"] == "raw_eeg/20261025-120000_my_recording_eyes_closed_.csv", up
+    assert FakeApi.repo[up["path_in_repo"]] == rawf.read_bytes()
+    side = json.loads(FakeApi.repo[up["path_in_repo"] + ".json"])
+    assert side["participant_id"] == "P01" and side["note"] == "eyes closed" and side["bytes"] == rawf.stat().st_size and len(side["sha256"]) == 64
+    for bad, why in ((Path(TMP) / "nope.csv", "is not a file"), (Path(TMP) / "x.exe", "not an EEG file type")):
+        if why != "is not a file":
+            bad.write_text("x")
+        try:
+            store.push_raw_eeg(bad)
+            raise AssertionError(bad)
+        except store.StorageError as exc:
+            assert why in str(exc), exc
+    try:
+        store.push_raw_eeg(rawf, participant="Jude Cutler")
+        raise AssertionError("names must be refused")
+    except store.StorageError:
+        pass
+    gz = Path(TMP) / "out.csv.gz"
+    n, labels, first = store.export_raw_recording(rawf, gz, unix_offset=1761400000.0)
+    rows_r = gzip.open(gz).read().decode().splitlines()
+    assert n == 2 and labels == ["Fz", "Pz"] and rows_r[0] == "unix_time,lsl_time,Fz_uV,Pz_uV" and rows_r[1] == "1761400010.0000,10.0,1.5,2.5", rows_r
+    assert abs(first - 1761400010.0) < 1e-6
+    (LOGS / "eeg_rawrec-20261025-120000_20261025-120000.csv").write_text("x")
+    assert not any(k.startswith("rawrec-") for k in store.scan_logs(str(LOGS)))
+    os.remove(LOGS / "eeg_rawrec-20261025-120000_20261025-120000.csv")
+    print("raw_eeg: ok (untouched upload + sidecar, bad types/names refused, free recording gets unix_time, not listed as a session)")
 
     # a rebuilt session replaces the old files remotely instead of leaving stale ones
     (ROOT / "sessions" / a / "eeg_clean.npz").unlink()

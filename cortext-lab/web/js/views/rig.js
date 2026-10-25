@@ -4,7 +4,7 @@ import { h } from '../util.js';
 import { DEVICES } from '../schema.js';
 import { loadSettings, patchSettings, loadParticipant, saveParticipant } from '../settings.js';
 import { HeadMap, Traces, EEGFeed, mapValues } from '../brainviz.js';
-import { storageInfo, uploadPending, downloadFromHub, createHubRepo } from '../dataset.js';
+import { storageInfo, uploadPending, downloadFromHub, createHubRepo, rawEegInfo, startRawRecording, stopRawRecording, pushRawFile, uploadRawFile } from '../dataset.js';
 import { Voice, NARRATOR_MOODS, EDGE_VOICES, browserVoices, narrationFacts, composeNarration } from '../voice.js';
 
 export const row = (label, el, hint) => h('div', { class: 'field' }, h('label', {}, label), el, hint || null);
@@ -169,7 +169,7 @@ export function storageCard() {
       line('This computer', `${info.data_root} · ${info.local_sessions} session(s), ${info.size_mb} MB${info.simulated_sessions ? ` (+${info.simulated_sessions} simulated, never uploaded)` : ''}`),
       line('Hugging Face', hf.repo ? `${hf.repo} (${hf.private ? 'private' : 'PUBLIC'})` : 'not set up'), line('Status', state),
       line('Not uploaded yet', info.pending_upload.length ? `${info.pending_upload.length} session(s)` : 'nothing'),
-      info.remote_only?.length ? line('On the server only', `${info.remote_only.length} session(s) you have not downloaded`) : null,
+      info.remote_only?.length ? line('On the server only', `${info.remote_only.length} session(s) you have not downloaded`) : '',
       h('label', { class: 'inline' }, auto, ' Upload each session automatically when it ends'));
     const ready = hf.installed && hf.configured && hf.has_token;
     const up = btn(`Upload ${info.pending_upload.length} pending`, async () => {
@@ -190,6 +190,73 @@ export function storageCard() {
     stBody, actions, stMsg);
   load(false);
   return { el };
+}
+
+/** Raw, timestamped EEG to its own Hugging Face folder (raw_eeg/): a free recording with no stimuli, or any file made with
+ *  another recorder. App sessions already upload their own voltage table to voltages/ (see the Data storage card). */
+export function rawEegCard() {
+  const msg = h('div', { class: 'small', style: { marginTop: '8px' } });
+  const say = (cls, text) => { msg.className = `small ${cls}`; msg.replaceChildren(...[].concat(text)); };
+  const link = (url, text) => h('a', { href: url, target: '_blank', rel: 'noopener' }, text);
+  const part = h('input', { type: 'text', placeholder: 'P01', size: 8, value: loadParticipant().participant || '', title: 'Participant code, never a name' });
+  const note = h('input', { type: 'text', placeholder: 'what this is (e.g. eyes closed 2 min)', style: { minWidth: '16em' } });
+  const state = h('div', { class: 'mono small muted' }, '…');
+  const list = h('div', { class: 'small' });
+  const recBtn = h('button', { class: 'btn small primary', type: 'button' }, 'Record raw EEG');
+  const stopBtn = h('button', { class: 'btn small', type: 'button', disabled: true }, 'Stop & upload');
+  const file = h('input', { type: 'file', style: { display: 'none' } });
+  const pick = h('button', { class: 'btn small', type: 'button', onclick: () => file.click() }, 'Upload a raw EEG file…');
+  let recording = false;
+  async function refresh() {
+    let r;
+    try { r = await rawEegInfo(); } catch { state.textContent = 'Bridge not reachable.'; recBtn.disabled = stopBtn.disabled = pick.disabled = true; return; }
+    pick.disabled = false;
+    const rec = r.recording || {};
+    recording = !!rec.recording;
+    recBtn.disabled = recording; stopBtn.disabled = !recording;
+    state.className = `mono small ${recording ? (rec.interrupted ? 'bad' : 'good') : 'muted'}`;
+    state.textContent = recording ? (rec.interrupted ? `● ${rec.id}: a session started and took over the recording; press Stop to save what was recorded`
+      : `● recording ${rec.id} · ${Math.round(rec.seconds)} s · ${rec.samples ?? '?'} samples`) : 'Not recording.';
+    list.replaceChildren(...(r.files || []).slice(0, 6).map((f) => h('div', { class: 'row' },
+      h('span', { class: 'mono' }, f.name), h('span', {}, `${f.size_mb} MB `,
+        f.uploaded ? h('span', { class: 'good' }, 'uploaded') : f.simulated ? h('span', { class: 'muted' }, 'simulated, kept here')
+          : h('button', { class: 'btn small', type: 'button', onclick: async () => {
+            say('muted', `Uploading ${f.name}…`); const x = await pushRawFile(f.name);
+            x.ok ? say('good', ['Uploaded: ', link(x.url, x.path_in_repo)]) : say('bad', x.error); refresh(); } }, 'Upload')))));
+  }
+  recBtn.onclick = async () => {
+    recBtn.disabled = true;
+    const r = await startRawRecording(part.value.trim(), note.value);
+    if (!r.ok) say('bad', r.error); else say('muted', 'Recording every sample with its time. Press “Stop & upload” when done.');
+    refresh();
+  };
+  stopBtn.onclick = async () => {
+    stopBtn.disabled = true; say('muted', 'Saving and uploading…');
+    const r = await stopRawRecording(true);
+    if (!r.ok) say('bad', r.error);
+    else if (r.uploaded) say('good', [`Saved ${r.samples} samples (${r.duration_s} s) and uploaded: `, link(r.url, r.path_in_repo)]);
+    else say('warn', `Saved ${r.samples} samples (${r.duration_s} s) to ${r.local_path}. Not uploaded: ${r.upload_error || 'upload off'}`);
+    refresh();
+  };
+  file.onchange = async () => {
+    const f = file.files[0]; file.value = '';
+    if (!f) return;
+    say('muted', `Uploading ${f.name} (${(f.size / 1e6).toFixed(1)} MB)…`);
+    const r = await uploadRawFile(f, { note: note.value, participant: part.value.trim() });
+    r.ok ? say('good', ['Uploaded: ', link(r.url, r.path_in_repo)]) : say('bad', r.error);
+    refresh();
+  };
+  const timer = setInterval(() => { if (recording) refresh(); }, 1000);
+  refresh();
+  const el = h('div', { class: 'card', id: 'raw-eeg' }, h('h2', {}, 'Raw EEG → Hugging Face'),
+    h('p', { class: 'muted small' }, 'Untouched voltages with their timestamps go to the dataset’s ', h('code', {}, 'raw_eeg/'),
+      ' folder (unix time, LSL time, one µV column per electrode). Record here with no stimuli, or upload a file from another recorder (CSV, XDF, EDF, FIF…). ',
+      'Every app session also uploads its own table to ', h('code', {}, 'voltages/'), '.'),
+    h('div', { class: 'ctrls', style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
+      h('label', { class: 'inline' }, 'Participant ', part), note),
+    h('div', { class: 'ctrls', style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' } }, recBtn, stopBtn, pick, file),
+    state, msg, list);
+  return { el, dispose: () => clearInterval(timer) };
 }
 
 /** Which voice speaks and how the narrator writes its lines (the Agent's spoken result). */

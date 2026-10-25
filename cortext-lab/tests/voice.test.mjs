@@ -37,7 +37,7 @@ test('template: says the percent, the letter, the label and the name', () => {
   const rng = mulberry32(1);
   for (let i = 0; i < 20; i++) {
     const t = templateNarration(narrationFacts({ trial: trial(), pred: pred(), name: 'Jude', when: 'before_click' }), rng);
-    assert.match(t, /78%/); assert.match(t, /\bB\b/); assert.match(t, /dog/);
+    assert.match(t, /78%/); assert.match(t, /\bB\b/); assert.match(t, /dog/); assert.match(t, /Jude/); assert.match(t, /brain waves/);
   }
   const t = templateNarration(narrationFacts({ trial: trial('dog'), pred: pred(), name: 'Jude', when: 'after_click' }), rng);
   assert.match(t, /agree/);
@@ -48,9 +48,16 @@ test('template: honest about simulated predictions and low confidence', () => {
   const sim = templateNarration(narrationFacts({ trial: trial(), pred: pred({ source: 'mock' }), name: 'Jude' }));
   assert.match(sim, /Simulation only/);
   assert.doesNotMatch(sim, /brain patterns/);
+  const simEeg = templateNarration(narrationFacts({ trial: trial(), pred: pred({ source: 'eeg', simulated: true }), name: 'Jude' }));
+  assert.match(simEeg, /Simulated EEG/); assert.match(simEeg, /78%/); assert.doesNotMatch(simEeg, /mock/);
   const low = templateNarration(narrationFacts({ trial: trial(), pred: pred({ probabilities: { cat: 0.3, dog: 0.32, cup: 0.2, circle: 0.18 } }) }), mulberry32(2));
   assert.match(low, /32%/);
   assert.match(low, /tricky|secrets/);
+  for (const p of [0.45, 0.6]) {   // every band says the name (the demo line: "Based on Jude's brain waves, I'm thinking answer B is the dog")
+    const r = { cat: (1 - p) / 3, dog: p, cup: (1 - p) / 3, circle: (1 - p) / 3 };
+    for (let i = 0; i < 10; i++) assert.match(templateNarration(narrationFacts({ trial: trial(), pred: pred({ probabilities: r }), name: 'Jude' }), mulberry32(i)), /Jude/);
+  }
+  for (let i = 0; i < 10; i++) assert.match(templateNarration(narrationFacts({ trial: trial(), pred: pred({ probabilities: { cat: 0.3, dog: 0.32, cup: 0.2, circle: 0.18 } }), name: 'Jude' }), mulberry32(i)), /Jude/);
   assert.match(templateNarration(null), /clear read|noisy/);
   const plain = templateNarration(narrationFacts({ trial: trial('dog'), pred: pred(), name: 'Jude', when: 'after_click' }), Math.random, { plain: true });
   assert.equal(plain, 'Model output: option B, the dog, at 78% confidence. The participant chose B, which agrees with the model.');

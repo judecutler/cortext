@@ -19,6 +19,9 @@ Add `--activate` to also make it the running model (copies it into `active/`).
 the answer. Same for every person, works from the first trial, needs the default filter chain and the 8-channel Unicorn
 montage. Rebuild it with `python cortext-lab/pipeline/make_p3000_function.py` (`--activate` to make it the running
 model). A calibrated model should beat it once you have one; percentages are deliberately soft and uncalibrated.
+**One at a time only:** it needs each picture to stay alone for at least ~0.8 s (the demo's 1 s + 0.3 s gap). In flash
+mode the next flash lands inside the 240-480 ms window and gets the credit: on simulated EEG it is then at chance (3/14).
+`models/active/` ships with it, so a fresh checkout decodes from trial 1.
 
 ## Choose which model runs
 - **On the website (easiest):** Agent → *Model* block lists the library and this laptop's calibrations, with who each

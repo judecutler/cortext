@@ -23,6 +23,13 @@ Sessions uploaded before this existed: `python datasets/cortext-p300/cortext_sto
 `eeg_raw.npz` locally: `pull --all` first). Download them with `pull --voltages`, or from the repo's `voltages/` folder
 on huggingface.co. Deleting a session deletes its voltage table too.
 
+**Raw EEG that is not a session** goes to `raw_eeg/` on Hugging Face: Experiment → Lab & data → *Raw EEG → Hugging Face*
+(**Record raw EEG** / **Stop & upload**, or **Upload a raw EEG file…** for files from another recorder), or
+`python datasets/cortext-p300/cortext_store.py raw FILE ... --participant P01 --note "eyes closed 2 min"`. Files are
+uploaded untouched with a `.json` description and a timestamped name, so uploads never overwrite each other; a local copy
+stays in `data/cortext-p300/raw_eeg/`. Free recordings have `unix_time` (absolute) and `lsl_time` columns; session
+voltage tables also get `unix_time` from 2026-10-25 on. Simulated recordings are never uploaded.
+
 ## What you need to do (once)
 
 1. Make a Hugging Face account (free) at huggingface.co. For a team, create an **organization** and invite teammates (write access for recorders, read for others).
