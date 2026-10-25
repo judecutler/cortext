@@ -67,7 +67,7 @@ def main():
             page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
             page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" and "ERR_TUNNEL" not in m.text and "ERR_NAME" not in m.text else None)
             set_participant(page, BASE, "SEQ")
-            page.wait_for_selector("text=12 items in 3 categories")
+            page.wait_for_selector("text=11 items in 3 categories")
 
             # ---- upload a folder ----
             page.locator("input[webkitdirectory]").set_input_files(folder)

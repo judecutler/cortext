@@ -53,7 +53,7 @@ def main():
             errs = []
             page.on("pageerror", lambda e: errs.append(str(e)))
             set_participant(page, BASE, "DEL")
-            page.wait_for_selector("text=12 items in 3 categories")
+            page.wait_for_selector("text=11 items in 3 categories")
             for l, v in {"Questions": "1", "Repeats per option": "1", "Flash on (ms)": "150", "Gap min (ms)": "80", "Gap max (ms)": "100", "Prompt shown first (ms)": "200"}.items():
                 set_num(page, l, v)
             page.click("text=Start session")

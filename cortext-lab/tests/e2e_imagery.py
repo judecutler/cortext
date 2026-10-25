@@ -33,7 +33,7 @@ def phase(page, ph, timeout=30000):
 def run_one(page, mode, imagery_ms, shot=None):
     """Configure, run ONE question, click the right answer, return that trial's markers."""
     set_participant(page, BASE, f"IMG-{mode}")
-    page.wait_for_selector("text=12 items in 3 categories")
+    page.wait_for_selector("text=11 items in 3 categories")
     assert field(page, "Imagery window (ms)").locator("input").count() == 1
     set_select(page, "Presentation mode", mode)
     set_num(page, "Questions", 1)
@@ -88,7 +88,7 @@ def main():
 
             # default is off: no imagery markers, trial unchanged
             set_participant(page, BASE, "IMG-default")
-            page.wait_for_selector("text=12 items in 3 categories")
+            page.wait_for_selector("text=11 items in 3 categories")
             assert field(page, "Imagery window (ms)").locator("input").input_value() == "0"
             _, ms = run_one(page, "mcq_flash", 0)
             assert not [m for m in ms if m["event"].startswith("imagery")], "imagery markers with the window off"
@@ -96,7 +96,7 @@ def main():
 
             # a leftover imagery value must not leak into a loaded preset that predates the setting
             set_participant(page, BASE, "IMG-preset")
-            page.wait_for_selector("text=12 items in 3 categories")
+            page.wait_for_selector("text=11 items in 3 categories")
             set_num(page, "Imagery window (ms)", 2500)
             page.locator("select[aria-label=Preset]").select_option(index=0)
             page.click("button:has-text('Load')")

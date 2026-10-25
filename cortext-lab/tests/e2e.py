@@ -51,7 +51,7 @@ def main():
             page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" and "ERR_TUNNEL" not in m.text and "ERR_NAME" not in m.text else None)
 
             set_participant(page, BASE, "E2E")
-            page.wait_for_selector("text=12 items in 3 categories")
+            page.wait_for_selector("text=11 items in 3 categories")
             page.screenshot(path=os.path.join(SHOTS, "01_experiment.png"))
             # small, fast session
             for label, val in {"Questions": "3", "Repeats per option": "2", "Flash on (ms)": "200", "Gap min (ms)": "100",

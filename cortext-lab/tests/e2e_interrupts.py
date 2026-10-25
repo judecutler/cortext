@@ -44,7 +44,7 @@ def main():
             errs = []
             page.on("pageerror", lambda e: errs.append(str(e)))
             set_participant(page, BASE, "INT")
-            page.wait_for_selector("text=12 items in 3 categories")
+            page.wait_for_selector("text=11 items in 3 categories")
             for label, val in {"Questions": "2", "Options per question": "4", "Repeats per option": "6", "Flash on (ms)": "300",
                                "Gap min (ms)": "100", "Gap max (ms)": "150", "Prompt shown first (ms)": "300"}.items():
                 set_num(page, label, val)

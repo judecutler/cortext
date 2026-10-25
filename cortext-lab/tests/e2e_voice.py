@@ -105,7 +105,7 @@ def main():
 
             # ---------- Session 1: sequential, question aloud, audio only, narrator after click ----------
             set_participant(page, BASE, "VOX")
-            page.wait_for_selector("text=12 items in 3 categories")
+            page.wait_for_selector("text=11 items in 3 categories")
             set_select(page, "Presentation mode", "mcq_sequential")
             for label, val in {"Questions": "2", "Options per question": "3", "Prompt shown first (ms)": "300",
                                "Each option on screen (ms)": "700", "Gap between options (ms)": "200", "Times each option is shown": "1"}.items():
@@ -165,7 +165,7 @@ def main():
             set_select(page, "Narrator writes with", "template")
             set_select(page, "Mood", "default")
             page.click("#topbar nav a[data-nav=experiment]")
-            page.wait_for_selector("text=12 items in 3 categories")
+            page.wait_for_selector("text=11 items in 3 categories")
             set_select(page, "Presentation mode", "mcq_flash")
             for label, val in {"Questions": "1", "Options per question": "3", "Prompt shown first (ms)": "300",
                                "Repeats per option": "2", "Flash on (ms)": "300", "Gap min (ms)": "300", "Gap max (ms)": "350"}.items():

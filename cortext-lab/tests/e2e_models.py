@@ -101,7 +101,7 @@ def main():
 
             # a session now predicts with the picked model
             page.click("#topbar nav a[data-nav=experiment]")
-            page.wait_for_selector("text=12 items in 3 categories")
+            page.wait_for_selector("text=11 items in 3 categories")
             set_select(page, "Presentation mode", "mcq_sequential")
             for label, val in {"Questions": "2", "Options per question": "3", "Prompt shown first (ms)": "300",
                                "Each option on screen (ms)": "500", "Gap between options (ms)": "200", "Times each option is shown": "1"}.items():

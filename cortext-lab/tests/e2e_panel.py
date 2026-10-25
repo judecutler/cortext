@@ -19,7 +19,7 @@ def main():
         with sync_playwright() as p:
             b = p.chromium.launch(); page = b.new_page(viewport={"width": 1300, "height": 800})
             set_participant(page, BASE, "P99")
-            page.wait_for_selector("text=12 items in 3 categories")
+            page.wait_for_selector("text=11 items in 3 categories")
             page.click("text=Start session")
             page.wait_for_selector(".run")
             assert page.is_visible("aside.dev")
