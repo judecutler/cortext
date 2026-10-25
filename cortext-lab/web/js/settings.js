@@ -34,9 +34,10 @@ export const DEFAULT_SETTINGS = {
   predictor_url: 'ws://localhost:8765',
   show_bars: false,                // live score bars under tiles (flash mode, demo only)
   use_plan: false,                 // true: run the question list from the Experiment tab instead of generating questions
-  shuffle_on_start: false,         // reshuffle the question list (order and images) every time a session starts
+  shuffle_on_start: true,          // reshuffle the question list (order and images) every time a session starts
   order_mode: 'random',            // random | fixed: in a custom list, shuffle option order per trial or keep the listed order
   // --- voice & audio (demo) ---
+  voice_on: false,                 // demo: read the question aloud AND say each option's name as it appears (sets speak_question + audiovisual at Start)
   speak_question: false,           // read the question aloud before the stimuli (the stimuli wait until it has finished)
   stim_modality: 'visual',         // visual | audio (spoken options, no visual change) | audiovisual (both together)
   narrate: 'off',                  // off | after_click (narrator announces the model's guess after the answer) | before_click
@@ -59,11 +60,14 @@ const LS_KEY = 'cortext-lab.settings.v1';
 export function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    if ((saved._defaults_rev || 0) < 2) {   // 2026-10-25: random question and image order became the default
+      saved.shuffle_on_start = true; saved.order_mode = 'random'; saved._defaults_rev = 2;
+    }
     return { ...DEFAULT_SETTINGS, ...saved, seed: null };
   } catch { return { ...DEFAULT_SETTINGS }; }
 }
 export function saveSettings(s) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify({ ...s, seed: null })); } catch { /* ignore */ }
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ ...s, seed: null, _defaults_rev: 2 })); } catch { /* ignore */ }
 }
 
 /** The on/gap/repeat timing that applies to a given trial type (used for records and estimates). */

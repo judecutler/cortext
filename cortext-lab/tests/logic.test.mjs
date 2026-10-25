@@ -407,3 +407,29 @@ test('undo snapshot: deep copy of plain data, blobs kept by reference', () => {
   assert.deepEqual(a.plan[0].options, ['a', 'b']);
   assert.equal(b.files.f, blob);
 });
+
+// 2026-10-25: per-trial seeds used to overflow double precision, so the correct answer kept landing in the same slot.
+test('per-trial seeds give an even answer position (no bias toward A)', async () => {
+  const u = await import('../web/js/util.js');
+  const { makeTrialRecord } = await import('../web/js/trial.js');
+  const byId = Object.fromEntries(['dog', 'cat', 'bird', 'car'].map((id) => [id, { id, category: 'x', label: id }]));
+  const c = [0, 0, 0, 0];
+  for (let s = 0; s < 100; s++) {
+    const S = (s * 2147483629 + 12345) >>> 0;
+    for (let tid = 0; tid < 20; tid++) {
+      const tr = makeTrialRecord({ sessionId: 's', spec: { type: 'mcq_sequential', target_id: 'dog', option_ids: ['dog', 'cat', 'bird', 'car'], trial_index: tid },
+        trialId: tid, attempt: 0, rng: u.mulberry32(u.mixSeed(S, tid)), settings: {}, byId });
+      c[tr.options.find((o) => o.is_target).position]++;
+    }
+  }
+  for (const n of c) assert.ok(n > 400 && n < 600, `answer positions ${c}`);
+});
+
+test('one-at-a-time: first round follows letter order A, B, C, D; later rounds are random', async () => {
+  const { makeFlashPlan } = await import('../web/js/flasher.js');
+  const { mulberry32 } = await import('../web/js/util.js');
+  const ids = ['a', 'b', 'c', 'd'];
+  const p = makeFlashPlan({ optionIds: ids, repeats: 3, rng: mulberry32(7), firstRoundInOrder: true });
+  assert.deepEqual(p.events.slice(0, 4).map((e) => e.option_id), ids);
+  assert.notEqual(p.events[4].option_id, 'd');
+});

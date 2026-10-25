@@ -35,6 +35,7 @@ export const mcqSequential = {
       const plan = makeFlashPlan({
         optionIds: trial.options.map((o) => o.id), repeats: s.seq_repeats, onMs: s.seq_on_ms,
         offMinMs: s.seq_gap_ms, offMaxMs: s.seq_gap_ms, rng: ctx.rng, fixedOrder: !!trial.fixed_order,
+        firstRoundInOrder: true,   // options are listed by letter (positions are already random), so A appears first, then B, C, D
       });
       trial.status = 'flashing';
       ctx.setPhase('flash');

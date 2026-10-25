@@ -42,6 +42,10 @@ export async function stimuliFor(settings) {
 export function prepareLaunch({ settings, stimuli, plan = [], reshuffle = false, seed = null, participant, device, notes = '', links = {} }) {
   const cur = { ...settings };
   cur.seed = seed ?? newSeed();
+  if (cur.voice_on) {   // demo "Voice on": question read aloud + each option's name spoken as it appears (recorded as such)
+    cur.speak_question = true;
+    if (!cur.stim_modality || cur.stim_modality === 'visual') cur.stim_modality = 'audiovisual';
+  }
   let specs, used = null;
   if (cur.use_plan) {
     if (!plan.length) throw new Error('“Use this list” is on but the question list is empty.');

@@ -94,6 +94,7 @@ export async function renderExperiment(root, app) {
     h('small', { class: 'warn', style: { display: 'block' } },
       'Seeing the model’s probabilities can bias the click (anchoring). Every trial records exactly what was shown (model_shown_before_click), so keep those clicks out of any evaluation of the model and use them as feedback only.'));
   const voiceCard = h('div', { class: 'card' }, h('h2', {}, 'Voice & audio'),
+    chk('voice_on', 'Voice on (demo)', 'One switch for the stage: reads the question aloud and says each option’s name as it appears. Same as ticking “Read the question aloud” with “Audio + visual” below; the session records it that way.'),
     chk('speak_question', 'Read the question aloud', 'Spoken during the prompt; the stimuli start only after it has finished, so the voice never overlaps the EEG window.'),
     sel('stim_modality', 'Stimulus modality', [['visual', 'Visual (pictures / text)'], ['audio', 'Audio: each option is spoken, nothing changes on screen'], ['audiovisual', 'Audio + visual together']],
       'Plays the item’s own audio file if the stimulus set has one (upload dog.mp3 next to dog.png), otherwise speaks its text. Sounds are pre-loaded and start on the marker frame; each flash_on marker records the audio latency. One-at-a-time mode (1 s each) suits spoken words best.'),
