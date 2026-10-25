@@ -102,7 +102,10 @@ def main():
         try:
             code, hdr, data = get("/api/tts?text=Which%20one%20is%20the%20dog%3F")
             assert code == 200 and len(data) > 500 and hdr["Content-Type"].startswith("audio/"), (code, hdr)
-            tts = f"TTS OK via {hdr['X-TTS-Engine']} ({len(data)} bytes)"
+            for i in range(8):   # regression: pyttsx3 sometimes returned before its file was filled
+                code, hdr, data = get(f"/api/tts?text=Narration%20line%20number%20{i}%20with%20{30 + i}%25%20confidence")
+                assert code == 200 and len(data) > 500, (i, code)
+            tts = f"TTS OK via {hdr['X-TTS-Engine']} (9 lines, last {len(data)} bytes)"
         except urllib.error.HTTPError as e:
             msg = json.loads(e.read().decode())["error"]
             assert e.code == 503 and ("pip install" in msg or st["tts_engines"]), msg

@@ -41,6 +41,7 @@ CONFIG_PATH = os.path.join(HERE, "voice.local.json")
 CACHE_DIR = os.path.join(HERE, "logs", "tts_cache")
 MAX_TEXT = 400
 DEFAULT_EDGE_VOICE = "en-US-AndrewMultilingualNeural"
+EDGE_TIMEOUT_S = 6   # live narration: a slow network must not leave the room in silence; fall back after this long
 
 _tts_lock = threading.Lock()
 _edge_down_until = 0.0   # after a network failure, skip edge-tts for a minute so offline demos are not slowed down
@@ -176,7 +177,7 @@ def _edge_tts(text, voice, rate, out_path):
     async def go():
         await edge_tts.Communicate(text, voice, rate=_rate_pct(rate)).save(out_path)
 
-    asyncio.run(asyncio.wait_for(go(), timeout=20))
+    asyncio.run(asyncio.wait_for(go(), timeout=EDGE_TIMEOUT_S))
     if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
         raise VoiceError("edge-tts returned no audio (no internet?)")
 
@@ -199,8 +200,17 @@ def _pyttsx3(text, voice, rate, out_path):
     args = json.dumps({"text": text, "voice": voice, "rate": min(2.0, max(0.5, float(rate or 1))), "out": out_path})
     with _tts_lock:
         r = subprocess.run([sys.executable, "-c", _PYTTSX3_SCRIPT, args], capture_output=True, text=True, timeout=30)
+    # pyttsx3 can return a moment before the file is filled (seen on Linux/espeak: size 0 right after runAndWait),
+    # so wait until the size is non-zero and stops changing.
+    last, deadline = -1, time.time() + 3.0
+    while time.time() < deadline:
+        size = os.path.getsize(out_path) if os.path.exists(out_path) else 0
+        if size > 0 and size == last:
+            break
+        last = size
+        time.sleep(0.15)
     if r.returncode != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
-        raise VoiceError((r.stderr or "pyttsx3 produced no audio").strip().splitlines()[-1][:200])
+        raise VoiceError(((r.stderr or "").strip().splitlines() or ["pyttsx3 produced no audio"])[-1][:200])
 
 
 # ---------------------------------------------------------------- narration

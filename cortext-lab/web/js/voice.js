@@ -185,7 +185,9 @@ export class Voice {
     if (!this.clips.has(key)) {
       const q = new URLSearchParams({ text, rate: String(this.rate) });
       if (this.voiceName) q.set('voice', this.voiceName);
-      const p = fetch(`/api/tts?${q}`).then(async (r) => {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 9000);   // never leave the room waiting: fall back to the browser's voice
+      const p = fetch(`/api/tts?${q}`, { signal: ac.signal }).then(async (r) => {
         if (!r.ok) {
           const j = await r.json().catch(() => ({}));
           this.lastServerError = j.error || `HTTP ${r.status}`;
@@ -193,7 +195,8 @@ export class Voice {
           return null;
         }
         return this._decode(await r.arrayBuffer(), r.headers.get('X-TTS-Engine') || 'server');
-      }).catch((e) => { this.lastServerError = String(e.message || e); return null; });
+      }).catch((e) => { this.lastServerError = e.name === 'AbortError' ? 'bridge voice took over 9 s' : String(e.message || e); return null; })
+        .finally(() => clearTimeout(timer));
       this.clips.set(key, p);
       p.then((c) => { if (!c) this.clips.delete(key); });   // retry next time
     }
