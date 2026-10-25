@@ -13,18 +13,19 @@
     "shape": "Which one is the {label}?"
   },
   "items": [
-    { "id": "dog",      "category": "animal", "label": "dog",      "text": "Dog",      "image": "stimuli/dog.svg" },
-    { "id": "cat",      "category": "animal", "label": "cat",      "text": "Cat",      "image": "stimuli/cat.svg" },
-    { "id": "bird",     "category": "animal", "label": "bird",     "text": "Bird",     "image": "stimuli/bird.svg" },
-    { "id": "fish",     "category": "animal", "label": "fish",     "text": "Fish",     "image": "stimuli/fish.svg" },
+    { "id": "dog",      "category": "animal", "label": "dog",      "text": "Dog",      "image": "stimuli/Animal_dog.jpg" },
+    { "id": "cat",      "category": "animal", "label": "cat",      "text": "Cat",      "image": "stimuli/Animal_cat.svg" },
+    { "id": "bird",     "category": "animal", "label": "bird",     "text": "Bird",     "image": "stimuli/Animal_bird.jpg" },
+    { "id": "fish",     "category": "animal", "label": "fish",     "text": "Fish",     "image": "stimuli/Animal_fish.jpg" },
     { "id": "rabbit",   "category": "animal", "label": "rabbit",   "text": "Rabbit",   "image": "stimuli/rabbit.svg" },
     { "id": "frog",     "category": "animal", "label": "frog",     "text": "Frog",     "image": "stimuli/frog.svg" },
-    { "id": "cup",      "category": "object", "label": "cup",      "text": "Cup",      "image": "stimuli/cup.svg" },
-    { "id": "umbrella", "category": "object", "label": "umbrella", "text": "Umbrella", "image": "stimuli/umbrella.svg" },
-    { "id": "house",    "category": "object", "label": "house",    "text": "House",    "image": "stimuli/house.svg" },
-    { "id": "circle",   "category": "shape",  "label": "circle",   "text": "Circle",   "image": "stimuli/circle.svg" },
-    { "id": "square",   "category": "shape",  "label": "square",   "text": "Square",   "image": "stimuli/square.svg" },
-    { "id": "triangle", "category": "shape",  "label": "triangle", "text": "Triangle", "image": "stimuli/triangle.svg" }
+    { "id": "cup",      "category": "object", "label": "cup",      "text": "Cup",      "image": "stimuli/Object_cup.jpg" },
+    { "id": "chair",    "category": "object", "label": "chair",    "text": "Chair",    "image": "stimuli/Object_chair.jpg" },
+    { "id": "scissor",  "category": "object", "label": "scissor",  "text": "Scissor",  "image": "stimuli/Object_scissor.jpg" },
+    { "id": "watch",    "category": "object", "label": "watch",    "text": "Watch",    "image": "stimuli/Object_watch.jpg" },
+    { "id": "circle",   "category": "shape",  "label": "circle",   "text": "Circle",   "image": "stimuli/Figure_circle.jpg" },
+    { "id": "square",   "category": "shape",  "label": "square",   "text": "Square",   "image": "stimuli/Figure_square.jpg" },
+    { "id": "pentagram", "category": "shape",  "label": "pentagram", "text": "Pentagram", "image": "stimuli/Figure_pentagram.jpg" }
   ],
   "distractor_sets": {
     "mixed": { "description": "any other item", "all": true },
