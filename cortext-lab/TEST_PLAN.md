@@ -17,6 +17,8 @@ python tests/e2e_imagery.py          # imagery window in both modes: off by defa
 python tests/e2e_panel.py             # run view: Hide/Show panel button and the I key
 python tests/test_voice.py            # voice endpoints against a FAKE LLM: custom context, honesty rules, missing key, CSRF; TTS if installed
 python tests/e2e_voice.py             # question aloud, audio-only stimuli (markers + latency), narrator before/after click, name kept out of data
+python tests/test_models.py           # models/active loaded at startup, live switching, uploads, path safety, never deletes a model
+python tests/e2e_models.py            # Setup → P300 model picker: switch + Undo, participant/SIM warnings, session predicts with the pick
 python tests/e2e_eeg.py               # simulated headset -> bridge -> dataset folder (occasionally flaky on the P300 amplitude check; rerun)
 ```
 

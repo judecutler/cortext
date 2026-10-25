@@ -14,6 +14,8 @@
 * EEG (see eeg_engine.py): finds the headset's LSL stream (eeg/stream_eeg.py), records it per session to
   logs/eeg_<session>.csv, reports signal quality / band power, and serves a live P300 scorer on ws://.../predict
   that the app uses when Predictor = "Live EEG".
+* Trained models (see models.py): runs the model in cortext-lab/models/active/ (or --p300-model FILE); the Setup page
+  lists models/library/ and this laptop's calibrations and switches the running model live (/api/models*).
 
 Standard library only; `pip install pylsl` is optional (free, no account).
 """
@@ -33,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wsproto  # noqa: E402
 import eeg_engine  # noqa: E402
 import voice  # noqa: E402  (TTS + LLM narration for the demo; all optional)
+import models  # noqa: E402  (trained P300 models: models/library + models/active)
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "datasets", "cortext-p300"))
@@ -292,7 +295,52 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({**voice.status(check=q.get("check", ["0"])[0] == "1"), "default_persona": voice.DEFAULT_PERSONA, "rules": voice.RULES})
         if path == "/api/tts":
             return self.send_tts(q)
+        if path == "/api/models":
+            return self.send_json(self.models_info())
         return super().do_GET()
+
+    # ---- trained P300 models (Setup page: list, pick the one to run, add files) ----
+    def _scorer(self):
+        eng = self.state.eeg
+        return eng.scorer if eng else None
+
+    def models_info(self):
+        eng = self.state.eeg
+        labels = list(eng.labels) if eng and eng.labels else None
+        info = models.listing(LOG_DIR, labels)
+        sc = self._scorer()
+        info["running"] = sc.status() if sc else None
+        info["scoring_available"] = sc is not None
+        info["live_channels"] = labels
+        return info
+
+    def models_post(self, path, body):
+        sc = self._scorer()
+        if path == "/api/models/select":
+            mid = body.get("id")
+            new = models.set_active(mid, LOG_DIR)
+            note = None
+            if sc is not None:
+                try:
+                    sc.set_model(new, "Setup page" if new else "none (picked on the Setup page)")
+                except ValueError as exc:
+                    return {"ok": False, "error": str(exc)}
+            else:
+                note = "saved as the active model; the bridge cannot score here (needs pylsl + numpy), it will be used once it can"
+            return {"ok": True, "active": os.path.basename(new) if new else None, "note": note, **self.models_info()}
+        if path == "/api/models/upload":
+            import base64
+            try:
+                data = base64.b64decode(body.get("data") or "", validate=True)
+            except ValueError:
+                return {"ok": False, "error": "bad file data"}
+            mid = models.add_to_library(data, body.get("filename"))
+            return {"ok": True, "id": mid, **self.models_info()}
+        if path == "/api/models/save-calibration":
+            eng = self.state.eeg
+            mid = models.save_calibration(body.get("id"), LOG_DIR, list(eng.labels) if eng else None)
+            return {"ok": True, "id": mid, **self.models_info()}
+        return None
 
     def send_tts(self, q):
         try:
@@ -336,6 +384,15 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"ok": False, "error": "bad JSON"}, 400)
         sid = body.get("session_id")
         state = self.state
+        if path.startswith("/api/models/"):
+            try:
+                r = self.models_post(path, body)
+            except models.ModelError as exc:
+                return self.send_json({"ok": False, "error": str(exc)})
+            except OSError as exc:
+                return self.send_json({"ok": False, "error": f"could not write the models folder: {exc}"})
+            if r is not None:
+                return self.send_json(r)
         if path == "/api/narrate":
             try:
                 return self.send_json(voice.narrate(body.get("provider"), body.get("facts") or {}, timeout=float(body.get("timeout", 6)), context=body.get("context")))
@@ -549,7 +606,9 @@ def main():
     ap.add_argument("--no-lsl", action="store_true", help="never create an LSL outlet")
     ap.add_argument("--no-csv", action="store_true", help="do not write the CSV backup")
     ap.add_argument("--eeg-stream", default=None, help="LSL EEG stream name to use (default: the first stream of type EEG, preferring a real one over the simulator)")
-    ap.add_argument("--p300-model", default=None, help="a .npz from eeg/train_p300.py (or logs/p300_adaptive_*.npz) to score with")
+    ap.add_argument("--p300-model", default=None,
+                    help="a .npz to score with (default: the file in cortext-lab/models/active/, if any). "
+                         "'none' = ignore models/active/ and adapt to the session. You can also switch on the Setup page.")
     ap.add_argument("--scorer", choices=["auto", "model", "adaptive", "heuristic"], default="auto",
                     help="auto: trained model if given, else adapt to this session after 5 trials, else a heuristic")
     ap.add_argument("--verbose", action="store_true")
@@ -561,7 +620,14 @@ def main():
     server = ThreadingHTTPServer((args.host, args.port), handler)
     server.daemon_threads = True
     if pylsl is not None:
-        state.eeg = eeg_engine.EEGEngine(state, pylsl, args.eeg_stream, args.p300_model, args.scorer, LOG_DIR)
+        model_path, model_source, model_warn = models.resolve_startup(args.p300_model)
+        state.eeg = eeg_engine.EEGEngine(state, pylsl, args.eeg_stream, model_path, args.scorer, LOG_DIR)
+        if state.eeg.scorer is not None:
+            state.eeg.scorer.model_source = model_source
+        print(f"  P300 model: {os.path.basename(model_path) if model_path else 'none (adapts to the session after 5 trials)'}"
+              f"  [{model_source}]" + (f"\n  WARNING: {model_warn}" if model_warn else ""))
+        if state.eeg.scorer is not None and state.eeg.scorer.model_error:
+            print(f"  WARNING: {state.eeg.scorer.model_error}")
         threading.Thread(target=state.eeg.run, daemon=True).start()
 
     print(f"CorText Lab bridge  http://{args.host}:{args.port}   (ws path /ws)")

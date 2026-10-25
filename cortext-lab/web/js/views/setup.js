@@ -6,6 +6,7 @@ import { loadSettings, patchSettings, loadParticipant, saveParticipant } from '.
 import { HeadMap, Traces, EEGFeed, mapValues } from '../brainviz.js';
 import { storageInfo, uploadPending, downloadFromHub, createHubRepo } from '../dataset.js';
 import { toast } from '../ui.js';
+import { modelCard } from './modelCard.js';
 import { Voice, NARRATOR_MOODS, EDGE_VOICES, browserVoices, narrationFacts, composeNarration } from '../voice.js';
 
 export async function renderSetup(root, app) {
@@ -78,7 +79,7 @@ export async function renderSetup(root, app) {
       const sc = eeg.scorer || {};
       hsStatus.innerHTML = `<span class="dot ${eeg.simulated ? 'amber' : 'green'}"></span><b>${eeg.device || eeg.name}</b>${eeg.simulated ? ' <span class="pill warn">SIMULATED</span>' : ''}` +
         `<div class="muted small mono">${eeg.channels} ch · ${eeg.measured_srate ?? '…'} Hz · ${(eeg.labels || []).join(' ')}</div>` +
-        `<div class="muted small mono">P300 scorer: ${sc.active ?? '–'}${sc.model_file ? ` (${sc.model_file})` : ''} · adapts after ${sc.adaptive_needs || '5 trials'}</div>` +
+        `<div class="muted small mono">P300 scorer: ${sc.active ?? '–'}${sc.model_file ? ` (${sc.model_file.split(/[\\/]/).pop()})` : ''} · adapts after ${sc.adaptive_needs || '5 trials'}</div>` +
         (eeg.analysis_error ? `<div class="warn small">${eeg.analysis_error}</div>` : '');
       const q = eeg.quality || [];
       hsChips.replaceChildren(...q.map((x) => h('span', { class: `qchip ${x.status}`, title: `${x.std_uv} µV (0.5–20 Hz std)` }, x.label, h('b', {}, x.status === 'good' ? '' : ` ${x.status}`))));
@@ -234,6 +235,10 @@ export async function renderSetup(root, app) {
         h('details', {}, h('summary', { class: 'small muted' }, 'Rules always added after the context (keeps the numbers honest)'), rulesEl))),
     h('div', { class: 'voice-test' }, sayHi, sayNarr), vMsg);
 
-  root.append(h('h1', {}, 'Setup'), h('div', { class: 'grid2' }, headsetCard, whoCard, predCard, hwCard, voiceCard, storeCard));
-  return () => { feed.stop(); offHs(); testVoice?.stopAll(); };
+  // ---------- trained P300 model ----------
+  const models = modelCard(() => participant.value);
+  participant.addEventListener('change', () => models.refresh());
+
+  root.append(h('h1', {}, 'Setup'), h('div', { class: 'grid2' }, headsetCard, whoCard, predCard, hwCard, models.el, voiceCard, storeCard));
+  return () => { feed.stop(); offHs(); testVoice?.stopAll(); models.dispose(); };
 }
