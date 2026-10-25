@@ -104,7 +104,7 @@ def main():
         offset = rep["t_b"] - t_page
         send_text(s, {"type": "sync_result", "offset_ms": offset, "rtt_ms": 1.0})
 
-        now_page = rep["t_b"] - offset + 5  # a marker "5 ms after" the sync point in page time
+        now_page = rep["t_b"] - offset - 5  # a marker stamped 5 ms BEFORE the sync reply, so its transit time is positive
         for i in range(3):
             send_text(s, {"type": "marker", "seq": i, "session_id": "test-sess", "event": "flash_on", "trial_id": 1,
                           "option_id": "dog", "category": "animal", "is_target": True, "repeat_index": i,
@@ -133,7 +133,10 @@ def main():
             proc.kill()
         if os.path.isdir(logdir):
             for f in set(os.listdir(logdir)) - before:
-                os.remove(os.path.join(logdir, f))
+                try:
+                    os.remove(os.path.join(logdir, f))
+                except OSError:   # Windows keeps a just-stopped process's files locked for a moment
+                    pass
 
 
 if __name__ == "__main__":
