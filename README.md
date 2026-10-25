@@ -1,6 +1,9 @@
 # cortext
 Attempting to build brain to text translation. 
 
+**Recording EEG? Start with [`DATA_COLLECTION.md`](DATA_COLLECTION.md)**: headset → website → cleaned dataset in
+[`datasets/cortext-p300/`](datasets/cortext-p300/README.md) → `git pull` and train.
+
 ## CorText Lab (experiment + demo app)
 
 [`cortext-lab/`](cortext-lab/README.md) is a browser-based experiment for recording P300 / attention data: a

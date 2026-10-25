@@ -4,6 +4,7 @@ import { Predictor } from '../predictor.js';
 import { SessionRunner } from '../session.js';
 import { flashCounts, summarizeTrials, applyValidity } from '../trial.js';
 import { INVALID_REASONS } from '../schema.js';
+import { HeadMap, EEGFeed, mapValues } from '../brainviz.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const noFocus = { tabindex: '-1', onmousedown: (e) => e.preventDefault() };
@@ -39,7 +40,7 @@ export function renderRun(root, app) {
   const dev = h('aside', { class: 'dev' },
     h('div', { class: 'card' }, h('h3', {}, 'Controls'), ctrl,
       h('div', { class: 'kbdhelp', style: { marginTop: '6px' } }, 'Space/Enter next · Backspace discard · R redo · 1–4 / A–D choose · P pause · M mode · Shift+F fullscreen · Shift+B bars')),
-    mkSec('conn', 'Connections'), mkSec('sess', 'Session'), mkSec('count', 'Valid trials & repeats per class'),
+    mkSec('conn', 'Connections'), mkSec('eeg', 'EEG headset'), mkSec('sess', 'Session'), mkSec('count', 'Valid trials & repeats per class'),
     mkSec('timing', 'Timing'), mkSec('list', 'Trials'), mkSec('log', 'Marker log'));
   root.append(h('div', { class: 'run' }, stage, dev), pdEl);
 
@@ -163,7 +164,8 @@ export function renderRun(root, app) {
     if (!p) return 'EEG indicates: … (waiting for the predictor)';
     if (p.timeout || p.best_option_id == null) return 'EEG indicates: — (predictor sent no answer)';
     const o = trial.options.find((x) => x.id === p.best_option_id);
-    const tag = p.source === 'mock' ? '  [MOCK — simulated, not evidence]' : '';
+    const tag = p.source === 'mock' ? '  [MOCK — simulated, not evidence]' : p.simulated ? '  [SIMULATED EEG — not evidence]' : p.source === 'eeg' ? `  [live EEG · ${p.scorer}${p.n_epochs_rejected ? ` · ${p.n_epochs_rejected} noisy epochs skipped` : ''}]` : '';
+    if (p.error) return `EEG indicates: — (${p.error})`;
     return `EEG indicates: ${o ? optLabel(o) : p.best_option_id}, confidence ${fmt(p.confidence, 2)}${tag}`;
   }
 
@@ -276,7 +278,26 @@ export function renderRun(root, app) {
     renderDev(true);
   }
 
-  const offRunner = runner.on(() => { syncOverlay(); renderDev(); });
+  // ---------- EEG mini view (researcher panel only; paused while stimuli are on screen) ----------
+  const eegCanvas = h('canvas', { class: 'headmap-xs' });
+  const eegText = h('div', { class: 'small' });
+  devSections.eeg.append(h('div', { class: 'eeg-mini' }, eegCanvas, eegText));
+  const eegMap = new HeadMap(eegCanvas, { compact: true });
+  const feed = new EEGFeed({ traceSeconds: 2, traceMs: 700, erpMs: 60000 }).start();
+  feed.on(() => {
+    if (app.mode === 'demo') return;
+    const tr = feed.trace;
+    eegMap.draw(mapValues('signal', tr, null) || {}, { quality: tr?.quality, range: [0, 50] });
+    const q = tr?.quality || [];
+    const bad = q.filter((x) => x.status !== 'good');
+    const eeg = app.bridge.status().eeg || {};
+    eegText.innerHTML = !eeg.found ? '<span class="bad">no EEG stream</span>'
+      : `${esc(eeg.device || eeg.name)}${eeg.simulated ? ' <b class="warn">SIMULATED</b>' : ''}<br>` +
+        `${q.length - bad.length}/${q.length} electrodes good${bad.length ? ': <span class="warn">' + esc(bad.map((x) => `${x.label} ${x.status}`).join(', ')) + '</span>' : ''}<br>` +
+        `recording: ${eeg.recording ? esc(String(eeg.recording.samples)) + ' samples' : '<span class="warn">no</span>'} · scorer ${esc(eeg.scorer?.active ?? '–')} (${eeg.scorer?.adaptive_trials ?? 0} trials learned)`;
+  });
+
+  const offRunner = runner.on(() => { feed.paused = ['flash', 'prompt'].includes(runner.phase); syncOverlay(); renderDev(); });
   const offBridge = app.bridge.onChange(() => renderDev());
   const devInterval = setInterval(() => renderDev(), 1000);
 
@@ -309,7 +330,7 @@ export function renderRun(root, app) {
   return () => {
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('beforeunload', onUnload);
-    offRunner(); offBridge(); clearInterval(devInterval); clearTimeout(devTimer);
+    offRunner(); offBridge(); clearInterval(devInterval); clearTimeout(devTimer); feed.stop();
     if (runner.phase !== 'finished') runner.stop();
   };
 }

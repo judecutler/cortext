@@ -38,4 +38,4 @@ export const INVALID_REASONS = [
 // Reasons set automatically by the app (not in the manual dropdown).
 export const AUTO_REASONS = ['unspecified', 'redo', 'aborted', 'paused', 'tab_hidden', 'no_response', 'early_click'];
 
-export const DEVICES = ['Muse', '8-node EEG', '32-node EEG', 'Other'];
+export const DEVICES = ['g.tec Unicorn / BCI Core-8', 'Simulated EEG (fake_eeg.py)', 'Muse', '8-node EEG', '32-node EEG', 'Other'];

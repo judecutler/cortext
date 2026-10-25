@@ -8,6 +8,9 @@ import { randn } from './util.js';
 
 export class Predictor {
   constructor({ mode = 'mock', url = 'ws://localhost:8765', mockSnr = 0.8 } = {}) {
+    // 'eeg' = the bridge's own live P300 scorer (ws://<bridge>/predict): same protocol as an external model server.
+    this.eeg = mode === 'eeg';
+    if (this.eeg) { mode = 'ws'; url = eegPredictUrl(); }
     this.mode = mode;
     this.url = url;
     this.mockSnr = mockSnr;
@@ -19,10 +22,10 @@ export class Predictor {
     if (mode === 'ws') this._connect();
   }
 
-  get label() { return this.mode === 'mock' ? 'MOCK (simulated, uses ground truth)' : this.mode === 'ws' ? 'ws model' : 'off'; }
+  get label() { return this.mode === 'mock' ? 'MOCK (simulated, uses ground truth)' : this.eeg ? 'Live EEG (bridge P300 scorer)' : this.mode === 'ws' ? 'ws model' : 'off'; }
   status() { return { mode: this.mode, connected: this.mode === 'ws' ? this.connected : this.mode === 'mock', url: this.url }; }
   onLive(fn) { this.liveCbs.add(fn); return () => this.liveCbs.delete(fn); }
-  _live(p300, cat) { this.liveCbs.forEach((fn) => fn({ p300, category_scores: cat || {}, source: this.mode })); }
+  _live(p300, cat) { this.liveCbs.forEach((fn) => fn({ p300, category_scores: cat || {}, source: this.eeg ? 'eeg' : this.mode })); }
 
   _connect() {
     try { this.ws = new WebSocket(this.url); } catch { return; }
@@ -38,8 +41,12 @@ export class Predictor {
         const own = m.probabilities && Object.keys(m.probabilities).length ? m.probabilities : null;
         const probabilities = own || (m.p300 && Object.keys(m.p300).length ? softmax(m.p300, 1) : null);
         this._resolve({
-          source: 'ws', best_option_id: m.best_option_id, confidence: m.confidence, p300: m.p300 || {},
-          category_scores: m.category_scores || {}, probabilities, probabilities_calibrated: !!own,
+          source: this.eeg ? 'eeg' : 'ws', best_option_id: m.best_option_id, confidence: m.confidence, p300: m.p300 || {},
+          category_scores: m.category_scores || {}, probabilities,
+          probabilities_calibrated: m.probabilities_calibrated ?? !!own,
+          // live-EEG extras (absent for other servers)
+          scorer: m.scorer, simulated: !!m.simulated, eeg_stream: m.eeg_stream, error: m.error,
+          n_epochs: m.n_epochs, n_epochs_used: m.n_epochs_used, n_epochs_rejected: m.n_epochs_rejected,
         });
         this._resolve = null;
       }
@@ -86,7 +93,7 @@ export class Predictor {
     if (this.mode === 'ws') {
       const p = new Promise((res) => { this._resolve = res; });
       this._send({ type: 'trial_end', trial_id: t.trial_id });
-      return Promise.race([p, new Promise((res) => setTimeout(() => res({ source: 'ws', timeout: true }), 3000))]);
+      return Promise.race([p, new Promise((res) => setTimeout(() => res({ source: this.eeg ? 'eeg' : 'ws', timeout: true }), this.eeg ? 6000 : 3000))]);
     }
     return null;
   }
@@ -103,6 +110,11 @@ Predictor.prototype.sendFeedback = function (trial) {
   });
   return true;
 };
+
+function eegPredictUrl() {
+  if (location.protocol === 'http:' || location.protocol === 'https:') return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/predict`;
+  return 'ws://localhost:8000/predict';
+}
 
 /** Softmax over an {id: score} object -> {id: probability}. k = inverse temperature. */
 export function softmax(scores, k = 1) {

@@ -1,3 +1,5 @@
 tests/screenshots/
 bridge/logs/
 __pycache__/
+*.tmp/
+p300_model.npz

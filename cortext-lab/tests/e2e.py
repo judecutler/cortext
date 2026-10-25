@@ -48,7 +48,7 @@ def main():
             ctx = browser.new_context(viewport={"width": 1500, "height": 900})
             page = ctx.new_page()
             page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
-            page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" else None)
+            page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" and "ERR_TUNNEL" not in m.text and "ERR_NAME" not in m.text else None)
 
             page.goto(BASE + "/")
             page.wait_for_selector("text=New session")

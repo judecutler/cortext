@@ -9,7 +9,9 @@
 * Clock sync: the page runs ping-pong rounds and reports (bridge_time - page_time). Markers carry the
   page's performance.now() timestamp, and the bridge converts it to an LSL timestamp, so network
   / event-loop delay does not shift the marker in the EEG time base.
-* Optional: watches for an LSL stream of type EEG and reports whether samples are flowing.
+* EEG (see eeg_engine.py): finds the headset's LSL stream (eeg/stream_eeg.py), records it per session to
+  logs/eeg_<session>.csv, reports signal quality / band power, and serves a live P300 scorer on ws://.../predict
+  that the app uses when Predictor = "Live EEG".
 
 Standard library only; `pip install pylsl` is optional (free, no account).
 """
@@ -23,10 +25,19 @@ import threading
 import time
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wsproto  # noqa: E402
+import eeg_engine  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline"))
+try:
+    import build_session  # noqa: E402  (needs numpy + scipy)
+    BUILD_ERROR = None
+except Exception as exc:
+    build_session = None
+    BUILD_ERROR = repr(exc)
 
 try:  # optional dependency
     import pylsl  # type: ignore
@@ -66,8 +77,10 @@ class State:
         self.csv_path = None
         self.clock_offset_ms = None  # bridge_time - page_time
         self.clock_rtt_ms = None
-        self.eeg = {"found": False}
+        self.eeg = None  # EEGEngine, created in main() when pylsl is available
         self.clients = set()
+        self.datasets = {}  # session_id -> last build result / error
+        self.build_lock = threading.Lock()
         if pylsl and not args.no_lsl:
             info = pylsl.StreamInfo(args.lsl_name, "Markers", 1, 0, "string", f"cortext-lab-{socket.gethostname()}")
             self.outlet = pylsl.StreamOutlet(info)
@@ -91,18 +104,23 @@ class State:
             self.csv_path = path
         return path
 
-    def handle_marker(self, msg):
+    def handle_marker(self, msg, offset=None):
+        """offset: this connection's page->bridge clock offset (each browser tab has its own clock origin)."""
         recv = perf_ms()
         page_t = msg.get("t_ms")
-        offset = self.clock_offset_ms
         if page_t is not None and offset is not None:
             bridge_t = page_t + offset
         else:
             bridge_t = recv  # no sync yet: best effort
         transit = recv - bridge_t
         lsl_ts = None
-        if self.outlet is not None:
+        if pylsl is not None:  # the marker's time in the LSL clock (also what the EEG timestamps use)
             lsl_ts = pylsl.local_clock() - transit / 1000.0
+        if self.eeg is not None and self.eeg.scorer is not None:
+            self.eeg.scorer.on_marker(msg, lsl_ts)
+        if msg.get("event") == "session_end" and msg.get("session_id"):
+            self.on_session_end(msg.get("session_id"))
+        if self.outlet is not None:
             payload = format_marker(msg, self.args.format)
             self.outlet.push_sample([payload], lsl_ts)
         row = {
@@ -123,6 +141,31 @@ class State:
                 self.csv_writer.writerow(row)
                 self.csv_file.flush()
 
+    # ---- dataset (pipeline/build_session.py) ----
+    def build_dataset(self, session_id, session=None, trials=None):
+        if build_session is None:
+            r = {"ok": False, "error": f"dataset builder unavailable: {BUILD_ERROR} (pip install numpy scipy)"}
+        else:
+            with self.build_lock:
+                try:
+                    stream = None
+                    if self.eeg and self.eeg.info.get("found"):
+                        stream = {k: v for k, v in self.eeg.info.items() if k not in ("quality", "bands", "recording", "scorer")}
+                    res = build_session.build(session_id, trials=trials, session=session, log_dir=LOG_DIR,
+                                              stream_info=stream if (session or {}).get("eeg") is None else None)
+                    r = {"ok": True, **res, "with_app_trials": bool(trials), "built_at": time.strftime("%H:%M:%S")}
+                except Exception as exc:
+                    r = {"ok": False, "error": str(exc)}
+        self.datasets[session_id] = r
+        return r
+
+    def on_session_end(self, session_id):
+        def later():
+            time.sleep(2.5)  # let the last EEG samples arrive
+            if not self.datasets.get(session_id, {}).get("with_app_trials"):
+                self.build_dataset(session_id)
+        threading.Thread(target=later, daemon=True).start()
+
     def status(self):
         consumers = None
         if self.outlet is not None:
@@ -142,7 +185,7 @@ class State:
             "last_seq": self.last_seq,
             "clock_offset_ms": self.clock_offset_ms,
             "clock_rtt_ms": self.clock_rtt_ms,
-            "eeg": self.eeg,
+            "eeg": self.eeg.status() if self.eeg else {"found": False, "error": "pylsl not installed: pip install pylsl"},
         }
 
 
@@ -153,43 +196,6 @@ def format_marker(msg, fmt):
     keep = {k: msg.get(k) for k in CSV_COLUMNS if k in msg and k not in ("extra",)}
     keep["extra"] = msg.get("extra")
     return json.dumps(keep, separators=(",", ":"))
-
-
-def eeg_monitor(state: State):
-    """Background thread: report whether an LSL EEG stream is present and delivering samples."""
-    if pylsl is None:
-        return
-    inlet = None
-    count = 0
-    t_window = time.time()
-    last_sample = None
-    while True:
-        try:
-            if inlet is None:
-                found = pylsl.resolve_byprop("type", "EEG", timeout=1.0)
-                if found:
-                    inlet = pylsl.StreamInlet(found[0], max_buflen=2)
-                    state.eeg = {"found": True, "name": found[0].name(), "channels": found[0].channel_count(),
-                                 "nominal_srate": found[0].nominal_srate(), "measured_srate": None, "age_ms": None}
-                    count, t_window = 0, time.time()
-                else:
-                    state.eeg = {"found": False}
-                    time.sleep(1.0)
-                continue
-            chunk, stamps = inlet.pull_chunk(timeout=0.0, max_samples=4096)
-            now = time.time()
-            if stamps:
-                count += len(stamps)
-                last_sample = now
-            if now - t_window >= 1.0:
-                state.eeg["measured_srate"] = round(count / (now - t_window), 1)
-                state.eeg["age_ms"] = None if last_sample is None else round((now - last_sample) * 1000)
-                count, t_window = 0, now
-            time.sleep(0.05)
-        except Exception as exc:  # stream lost etc.
-            state.eeg = {"found": False, "error": repr(exc)}
-            inlet = None
-            time.sleep(1.0)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -206,20 +212,76 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if path == "/ws" and self.headers.get("Upgrade", "").lower() == "websocket":
-            return self.serve_ws()
+        q = parse_qs(urlparse(self.path).query)
+        if self.headers.get("Upgrade", "").lower() == "websocket":
+            if path == "/ws":
+                return self.serve_ws(self.marker_messages)
+            if path == "/predict":
+                return self.serve_ws(self.predict_messages)
         if path == "/api/status":
-            body = json.dumps(self.state.status()).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
+            return self.send_json(self.state.status())
+        if path == "/api/eeg/trace":
+            eng = self.state.eeg
+            secs = min(30.0, float(q.get("seconds", ["5"])[0]))
+            return self.send_json(eng.trace(secs) if eng else {"error": "pylsl not installed"})
+        if path == "/api/eeg/erp":
+            eng = self.state.eeg
+            return self.send_json(eng.scorer.erp() if (eng and eng.scorer) else {"labels": []})
+        if path == "/api/dataset":
+            return self.send_json(self.state.datasets.get(q.get("session_id", [""])[0]) or {"ok": None})
+        if path == "/api/eeg/session.csv":
+            return self.send_session_eeg(q.get("session_id", [""])[0])
         return super().do_GET()
 
+    def do_POST(self):
+        path = urlparse(self.path).path
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(n).decode() or "{}") if n else {}
+        except ValueError:
+            return self.send_json({"ok": False, "error": "bad JSON"}, 400)
+        sid = body.get("session_id")
+        if path == "/api/dataset/build" and sid:
+            return self.send_json(self.state.build_dataset(sid, body.get("session"), body.get("trials")))
+        if path == "/api/dataset/push" and sid:
+            r = self.state.datasets.get(sid)
+            if not r or not r.get("ok"):
+                r = self.state.build_dataset(sid, body.get("session"), body.get("trials"))
+            if not r.get("ok"):
+                return self.send_json(r)
+            ok, log = build_session.git_publish(r)
+            return self.send_json({"ok": ok, "log": log, "relative_path": r.get("relative_path")})
+        return self.send_json({"ok": False, "error": "unknown endpoint"}, 404)
+
+    def send_json(self, obj, code=200):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_session_eeg(self, session_id):
+        eng = self.state.eeg
+        files = eng.session_files(session_id) if (eng and session_id) else []
+        if not files:
+            return self.send_json({"error": "no EEG recorded for this session"}, 404)
+        # several files = the stream dropped and came back; concatenate under one header
+        parts = []
+        for i, f in enumerate(files):
+            with open(f, "r", encoding="utf-8") as fh:
+                lines = fh.read().splitlines(True)
+            parts.append("".join(lines if i == 0 else lines[1:]))
+        body = "".join(parts).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-EEG-Files", str(len(files)))
+        self.end_headers()
+        self.wfile.write(body)
+
     # ---- websocket ----
-    def serve_ws(self):
+    def serve_ws(self, on_message):
         key = self.headers.get("Sec-WebSocket-Key")
         if not key:
             self.send_error(400)
@@ -244,18 +306,8 @@ class Handler(SimpleHTTPRequestHandler):
         def send_json(obj):
             send_raw(0x1, json.dumps(obj, separators=(",", ":")).encode())
 
-        state = self.state
-        state.clients.add(send_json)
-        stop = threading.Event()
-
-        def stats_loop():
-            while not stop.wait(1.0):
-                try:
-                    send_json(state.status())
-                except Exception:
-                    return
-
-        threading.Thread(target=stats_loop, daemon=True).start()
+        conn = {"send": send_json, "stop": threading.Event()}
+        on_message(conn, None)  # connection opened
         try:
             while True:
                 text = wsproto.read_message(self.rfile, send_raw)
@@ -265,25 +317,106 @@ class Handler(SimpleHTTPRequestHandler):
                     msg = json.loads(text)
                 except ValueError:
                     continue
-                kind = msg.get("type")
-                if kind == "marker":
-                    state.handle_marker(msg)
-                elif kind == "sync":
-                    send_json({"type": "sync_reply", "id": msg.get("id"), "t_c": msg.get("t_c"), "t_b": perf_ms()})
-                elif kind == "sync_result":
-                    state.clock_offset_ms = msg.get("offset_ms")
-                    state.clock_rtt_ms = msg.get("rtt_ms")
-                elif kind == "hello":
-                    path = state.open_csv(msg.get("session_id")) if msg.get("session_id") else state.csv_path
-                    send_json({"type": "hello_ack", "csv_path": path, "lsl_available": state.outlet is not None,
-                               "lsl_name": state.outlet_name, "bridge_time_ms": perf_ms()})
-                elif kind == "bye":
+                if on_message(conn, msg) is False:
                     break
         except (ConnectionError, OSError):
             pass
         finally:
-            stop.set()
-            state.clients.discard(send_json)
+            conn["stop"].set()
+            self.state.clients.discard(send_json)
+
+    # ---- /ws: markers, clock sync, session hello ----
+    def marker_messages(self, conn, msg):
+        state = self.state
+        send_json = conn["send"]
+        if msg is None:
+            state.clients.add(send_json)
+
+            def stats_loop():
+                while not conn["stop"].wait(1.0):
+                    try:
+                        send_json(state.status())
+                    except Exception:
+                        return
+            threading.Thread(target=stats_loop, daemon=True).start()
+            return
+        kind = msg.get("type")
+        if kind == "marker":
+            state.handle_marker(msg, conn.get("offset"))
+        elif kind == "sync":
+            send_json({"type": "sync_reply", "id": msg.get("id"), "t_c": msg.get("t_c"), "t_b": perf_ms()})
+        elif kind == "sync_result":
+            # Per connection: a second tab (e.g. the neural monitor) has a different clock origin and must not
+            # overwrite the session tab's offset. The global copy (used for page_t_ms in EEG files) follows the
+            # connection that is running a session.
+            conn["offset"] = msg.get("offset_ms")
+            if conn.get("session_id") or state.clock_offset_ms is None:
+                state.clock_offset_ms = msg.get("offset_ms")
+                state.clock_rtt_ms = msg.get("rtt_ms")
+        elif kind == "hello":
+            path = state.open_csv(msg.get("session_id")) if msg.get("session_id") else state.csv_path
+            if msg.get("session_id"):
+                conn["session_id"] = msg.get("session_id")
+                if conn.get("offset") is not None:
+                    state.clock_offset_ms = conn["offset"]
+            if msg.get("session_id") and state.eeg:
+                state.eeg.start_session(msg.get("session_id"))
+            send_json({"type": "hello_ack", "csv_path": path, "lsl_available": state.outlet is not None,
+                       "lsl_name": state.outlet_name, "bridge_time_ms": perf_ms()})
+        elif kind == "bye":
+            return False
+
+    # ---- /predict: the app's predictor protocol, answered by the live EEG P300 scorer ----
+    def predict_messages(self, conn, msg):
+        if msg is None:
+            conn["trial"] = None
+            return
+        eng = self.state.eeg
+        scorer = eng.scorer if eng else None
+        kind = msg.get("type")
+        send = conn["send"]
+        if kind == "trial_start":
+            t = {"session_id": msg.get("session_id"), "trial_id": msg.get("trial_id"),
+                 "options": [o.get("id") for o in msg.get("options", [])], "active": True}
+            conn["trial"] = t
+            if scorer:
+                threading.Thread(target=self._live_loop, args=(conn, t, scorer), daemon=True).start()
+        elif kind == "trial_end":
+            if os.environ.get("CORTEXT_DEBUG"):
+                print(f"[debug] {time.time():.2f} trial_end received", flush=True)
+            t = conn.get("trial")
+            if not t or t["trial_id"] != msg.get("trial_id"):
+                t = {"session_id": msg.get("session_id"), "trial_id": msg.get("trial_id"), "options": []}
+            t["active"] = False
+
+            def finish():
+                base = {"type": "prediction", "trial_id": t["trial_id"], "category_scores": {},
+                        "eeg_stream": (eng.info.get("name") if eng else None),
+                        "simulated": bool(eng and eng.info.get("simulated"))}
+                if scorer is None or not eng.info.get("found"):
+                    why = "no EEG stream" if (eng and scorer) else (eeg_engine.NUMPY_ERROR or "pylsl not installed")
+                    send({**base, "best_option_id": None, "confidence": None, "p300": {}, "error": why})
+                    return
+                r = scorer.wait_and_score(t["session_id"], t["trial_id"], t["options"])
+                if "error" in r:
+                    send({**base, "best_option_id": None, "confidence": None, "p300": {}, "error": r["error"]})
+                else:
+                    if os.environ.get("CORTEXT_DEBUG"):
+                        print(f"[debug] {time.time():.2f} prediction scored, sending", flush=True)
+                    send({**base, **r})
+                    eng.evidence = {"trial_id": t["trial_id"], "final": True, **r}
+            threading.Thread(target=finish, daemon=True).start()
+        # 'flash' messages are ignored: the bridge already has every flash, with an LSL timestamp, from /ws markers.
+
+    def _live_loop(self, conn, t, scorer):
+        while t.get("active") and not conn["stop"].wait(0.3):
+            try:
+                r = scorer.score_trial(t["session_id"], t["trial_id"], t["options"], partial=True)
+                if "error" not in r and r.get("n_epochs_used"):
+                    conn["send"]({"type": "live", "trial_id": t["trial_id"], "p300": r["p300"], "category_scores": {}})
+                    self.state.eeg.evidence = {"trial_id": t["trial_id"], "final": False, **r}
+            except Exception:
+                pass
 
 
 def main():
@@ -294,6 +427,10 @@ def main():
     ap.add_argument("--format", choices=["json", "compact"], default="json", help="LSL marker string format")
     ap.add_argument("--no-lsl", action="store_true", help="never create an LSL outlet")
     ap.add_argument("--no-csv", action="store_true", help="do not write the CSV backup")
+    ap.add_argument("--eeg-stream", default=None, help="LSL EEG stream name to use (default: the first stream of type EEG, preferring a real one over the simulator)")
+    ap.add_argument("--p300-model", default=None, help="a .npz from eeg/train_p300.py (or logs/p300_adaptive_*.npz) to score with")
+    ap.add_argument("--scorer", choices=["auto", "model", "adaptive", "heuristic"], default="auto",
+                    help="auto: trained model if given, else adapt to this session after 5 trials, else a heuristic")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -302,7 +439,9 @@ def main():
     handler = partial(Handler, directory=WEB_DIR)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     server.daemon_threads = True
-    threading.Thread(target=eeg_monitor, args=(state,), daemon=True).start()
+    if pylsl is not None:
+        state.eeg = eeg_engine.EEGEngine(state, pylsl, args.eeg_stream, args.p300_model, args.scorer, LOG_DIR)
+        threading.Thread(target=state.eeg.run, daemon=True).start()
 
     print(f"CorText Lab bridge  http://{args.host}:{args.port}   (ws path /ws)")
     if state.outlet:
@@ -312,6 +451,11 @@ def main():
     else:
         print(f"  LSL NOT available -> CSV fallback only ({LSL_IMPORT_ERROR}). Install with: pip install pylsl")
     print(f"  CSV backups: {'disabled' if args.no_csv else LOG_DIR}")
+    if state.eeg is None:
+        print("  EEG: needs pylsl (pip install pylsl) to receive the headset stream")
+    else:
+        print("  EEG: waiting for an LSL EEG stream (run eeg/stream_eeg.py, or eeg/fake_eeg.py to simulate)"
+              + ("" if eeg_engine.NUMPY_ERROR is None else "\n       numpy/scipy missing -> recording only, no scoring/brain map"))
     try:
         server.serve_forever()
     except KeyboardInterrupt:

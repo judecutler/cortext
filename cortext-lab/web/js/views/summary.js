@@ -1,6 +1,7 @@
 import { h, fmt } from '../util.js';
 import { loadSession, exportSessionZip, exportSingleFile } from '../exporter.js';
 import { summarizeTrials, flashCounts } from '../trial.js';
+import { buildDataset, pushDataset } from '../dataset.js';
 
 const pc = (x) => (x == null ? '–' : (100 * x).toFixed(0) + '%');
 
@@ -13,10 +14,51 @@ export async function renderSummary(root, app, sessionId) {
   const unsent = flashOn.filter((m) => !m.bridge_sent).length;
   const stat = (label, value, cls = '') => h('div', { class: 'card' }, h('div', { class: 'muted' }, label), h('div', { style: { fontSize: '28px', fontWeight: 700 }, class: cls }, value));
 
+  const dsBody = h('div', {}, h('span', { class: 'muted' }, 'Cleaning the EEG and building the dataset entry…'));
+  const dsLog = h('pre', { class: 'mono gitlog', style: { display: 'none' } });
+  const pushBtn = h('button', { class: 'btn primary', disabled: true, onclick: doPush }, 'Publish to GitHub');
+  const rebuildBtn = h('button', { class: 'btn', onclick: doBuild }, 'Rebuild');
+  const dsCard = h('div', { class: 'card dataset-card' },
+    h('h2', {}, 'Training dataset'),
+    h('p', { class: 'muted small' }, 'The EEG of this session is cleaned automatically (drift + mains removal, 0.5–40 Hz, bad-electrode repair, artifact flags), cut into epochs on every flash and saved to datasets/cortext-p300/ in the repo. "Publish" commits and pushes only that folder so teammates can git pull and train.'),
+    dsBody, h('div', { style: { marginTop: '10px', display: 'flex', gap: '8px' } }, pushBtn, rebuildBtn), dsLog);
+
+  function showDs(r) {
+    if (!r || r.ok === false) {
+      dsBody.replaceChildren(h('div', { class: 'bad' }, 'Dataset not built: ' + (r?.error || 'bridge offline')),
+        h('div', { class: 'muted small' }, 'Needs the bridge running with the EEG stream recorded during the session (and numpy + scipy).'));
+      pushBtn.disabled = true;
+      return;
+    }
+    const q = r.quality;
+    dsBody.replaceChildren(
+      h('div', { class: 'mono' }, r.relative_path + (r.simulated ? '   (SIMULATED: kept apart from real data)' : '')),
+      h('div', { class: 'dsstats' },
+        ...[['usable epochs', `${q.epochs_usable} / ${q.epochs_total}`], ['valid trials', q.trials_valid], ['rejected (artifacts)', q.epochs_rejected_artifact],
+          ['bad electrodes', Object.keys(q.bad_channels).join(', ') || 'none'], ['mains removed', `${q.mains_hz} Hz`], ['duration', `${q.duration_s} s`]]
+          .map(([k, v]) => h('div', {}, h('div', { class: 'muted small' }, k), h('b', {}, String(v))))),
+      h('ul', { class: q.verdict.ok ? 'good' : 'warn' }, ...q.verdict.messages.map((m) => h('li', {}, m))));
+    pushBtn.disabled = false;
+  }
+  async function doBuild() {
+    dsBody.replaceChildren(h('span', { class: 'muted' }, 'Cleaning the EEG and building the dataset entry…'));
+    try { showDs(await buildDataset(sessionId)); } catch (e) { showDs({ ok: false, error: e.message }); }
+  }
+  async function doPush() {
+    pushBtn.disabled = true; pushBtn.textContent = 'Publishing…';
+    try {
+      const r = await pushDataset(sessionId);
+      dsLog.style.display = ''; dsLog.textContent = (r.ok ? '✓ Published. Teammates: git pull\n\n' : '✗ Not published\n\n') + (r.log || r.error || '');
+    } catch (e) { dsLog.style.display = ''; dsLog.textContent = '✗ ' + e.message; }
+    pushBtn.disabled = false; pushBtn.textContent = 'Publish to GitHub';
+  }
+  doBuild();
+
   root.append(
     h('h1', {}, 'Session summary'),
     h('p', { class: 'muted' }, `${session.session_id} · participant ${session.participant_id} · ${session.device} · status ${session.status} · seed ${session.seed} · ${fmt(session.refresh_hz_est, 1)} Hz display`),
     session.notes ? h('p', {}, 'Notes: ' + session.notes) : null,
+    dsCard,
     h('div', { class: 'grid2' },
       stat('Attempts (incl. redos)', S.attempts), stat('Valid trials', S.valid, 'good'),
       stat('Discard rate', pc(S.discard_rate), S.discard_rate > 0.2 ? 'warn' : ''),
@@ -29,7 +71,7 @@ export async function renderSummary(root, app, sessionId) {
       h('p', {}, `Markers stored: ${markers.length} (${flashOn.length} flash_on${unsent ? `, ${unsent} NOT delivered to the bridge — check the CSV/LSL log` : ', all delivered to the bridge'}).`),
       S.prediction_real ? h('p', {}, `EEG predictor vs ground truth (n=${S.prediction_real.n}): ${pc(S.prediction_real.accuracy_vs_truth)} — descriptive only; evaluate offline with held-out controls.`) : null,
       trials.some((t) => t.model_display) ? h('p', { class: 'warn' }, `The model's probabilities were shown before the click on ${trials.filter((t) => t.model_display).length} trial(s): those clicks may be anchored on the model, so use them as feedback (model_feedback.csv), not as independent ground truth.`) : null,
-      S.prediction_mock ? h('p', { class: 'warn' }, `Mock predictor readouts (n=${S.prediction_mock.n}) are simulated from the ground truth and are not a result.`) : null),
+      S.prediction_mock ? h('p', { class: 'warn' }, `Mock / simulated-EEG predictions (n=${S.prediction_mock.n}) are simulated from the ground truth and are not a result.`) : null),
     h('div', {},
       h('button', { class: 'btn primary', onclick: () => exportSessionZip(sessionId) }, 'Export session (zip)'), ' ',
       ['session.json', 'trials.csv', 'markers.csv', 'model_feedback.csv'].map((f) => [h('button', { class: 'btn', onclick: () => exportSingleFile(sessionId, f) }, f), ' ']),

@@ -60,7 +60,13 @@ export class SessionRunner {
     s.refresh_ms_est = refresh.frame_ms; s.refresh_hz_est = refresh.hz;
     s.status = 'running'; s.started_iso = new Date().toISOString();
     await this.saveSession();
-    this.markers.emit('session_start', { extra: { participant_id: s.participant_id, device: s.device, refresh_hz_est: refresh.hz, settings: this.settings } });
+    const eeg = this.bridge.status().eeg;
+    if (eeg && eeg.found) {
+      s.eeg = { name: eeg.name, device: eeg.device, channels: eeg.channels, labels: eeg.labels, nominal_srate: eeg.nominal_srate,
+        simulated: !!eeg.simulated, source_id: eeg.source_id, quality_at_start: eeg.quality };
+      db.put('sessions', s).catch(() => {});
+    }
+    this.markers.emit('session_start', { extra: { participant_id: s.participant_id, device: s.device, refresh_hz_est: refresh.hz, settings: this.settings, eeg: s.eeg || null } });
     this.notify();
     try {
       while (this.queue.length && !this.stopped) {

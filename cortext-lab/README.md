@@ -33,6 +33,23 @@ indicators for: bridge connection, LSL outlet, LSL recorder attached, EEG stream
 Hotkeys (run view): `Space`/`Enter` next/start · `Backspace` discard · `R` redo · `1–4` or `A–D` choose answer ·
 `P` pause · `M` Researcher/Demo mode · `Shift+F` fullscreen · `Shift+B` live score bars.
 
+## Live EEG, cleaning and the shared dataset
+
+See [`../DATA_COLLECTION.md`](../DATA_COLLECTION.md). In short:
+- `eeg/stream_eeg.py` streams the g.tec headset (via gpype) to LSL; `eeg/fake_eeg.py` streams SIMULATED EEG for testing.
+- The bridge (`bridge/eeg_engine.py`) records it per session (`bridge/logs/eeg_<session>_*.csv`), reports per-electrode
+  quality and band power, and runs a live P300 scorer on `ws://…/predict` (Predictor = "Live EEG").
+  - The scorer starts with an untrained heuristic (mean 250–450 ms amplitude over parietal channels).
+  - After 5 valid trials and 30 target epochs it retrains a shrinkage-LDA on this session after each trial.
+  - It never uses a trial's own labels before that trial has been predicted.
+  - `--p300-model file.npz` loads a model trained with `pipeline/train_p300.py` instead.
+- At session end, `pipeline/build_session.py` cleans the EEG and writes `datasets/cortext-p300/sessions/<id>/`.
+  The summary page's "Publish to GitHub" button commits and pushes only that folder.
+- `#/brain` is the Neural monitor: scalp map, region band power, live traces, P300 waveform and answer evidence. It is
+  for the audience on a second screen, never for the participant during flashing.
+- Each browser tab keeps its own clock offset in the bridge. Opening the monitor in a second tab must not (and no longer
+  does) shift the session's marker timestamps.
+
 ## Presentation modes
 
 Pick one under **Setup → Presentation mode**. Both write the same marker schema and the same exports, so the same

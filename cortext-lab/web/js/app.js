@@ -6,6 +6,7 @@ import { renderRun } from './views/run.js';
 import { renderReview } from './views/review.js';
 import { renderSummary } from './views/summary.js';
 import { renderSessions } from './views/sessions.js';
+import { renderBrain } from './views/brain.js';
 import { h } from './util.js';
 
 const bridge = new BridgeClient();
@@ -32,8 +33,9 @@ function topStatus() {
   const s = bridge.status();
   const el = document.getElementById('topstatus');
   if (!el) return;
-  el.innerHTML = `<span class="dot ${s.connected ? 'green' : 'red'}"></span>bridge ${s.connected ? 'connected' : 'offline'}` +
-    (s.connected ? ` · LSL ${s.lsl_available ? 'on' : 'off'}` : '');
+  const e = s.eeg || {};
+  const eegTxt = !s.connected ? '' : e.found ? ` · <span class="dot ${e.simulated ? 'amber' : 'green'}"></span>EEG ${e.simulated ? 'SIMULATED' : (e.device || e.name)} ${e.good_channels != null ? `${e.good_channels}/${e.channels} good` : ''}` : ' · <span class="dot red"></span>no EEG';
+  el.innerHTML = `<span class="dot ${s.connected ? 'green' : 'red'}"></span>bridge ${s.connected ? 'online' : 'offline'}` + eegTxt;
 }
 
 async function route() {
@@ -49,12 +51,14 @@ async function route() {
   currentHash = hash;
   view.replaceChildren();
   const [, name, arg] = hash.split('/');
+  document.body.dataset.route = name || 'setup';
   try {
     if (name === 'run') cleanup = renderRun(view, app);
     else if (name === 'review') await renderReview(view, app, decodeURIComponent(arg));
     else if (name === 'summary') await renderSummary(view, app, decodeURIComponent(arg));
     else if (name === 'sessions') await renderSessions(view, app);
-    else await renderSetup(view, app);
+    else if (name === 'brain') cleanup = renderBrain(view, app);
+    else cleanup = await renderSetup(view, app);
   } catch (e) {
     console.error(e);
     view.replaceChildren(h('div', { class: 'card' }, h('h2', { class: 'bad' }, 'Something went wrong'), h('pre', { class: 'mono' }, String(e.stack || e))));

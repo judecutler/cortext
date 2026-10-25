@@ -73,7 +73,7 @@ export function summarizeTrials(trials) {
   const reasons = {};
   trials.filter((t) => !t.valid).forEach((t) => { reasons[t.invalid_reason || 'unspecified'] = (reasons[t.invalid_reason || 'unspecified'] || 0) + 1; });
   const predStat = (isMock) => {
-    const ps = clicked.filter((t) => t.prediction && t.prediction.best_option_id != null && (t.prediction.source === 'mock') === isMock);
+    const ps = clicked.filter((t) => t.prediction && t.prediction.best_option_id != null && (t.prediction.source === 'mock' || !!t.prediction.simulated) === isMock);
     return ps.length ? { n: ps.length, accuracy_vs_truth: ps.filter((t) => t.prediction.best_option_id === t.true_answer_id).length / ps.length } : null;
   };
   return {

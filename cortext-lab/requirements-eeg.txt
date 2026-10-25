@@ -1,0 +1,6 @@
+# Live EEG + dataset pipeline (the web app and bridge alone need only the Python standard library)
+pylsl>=1.16
+numpy>=1.24
+scipy>=1.10
+gpype[lsl]>=4.0   # g.tec headset driver used by eeg/stream_eeg.py (same package as bci.py)
+playwright        # tests only

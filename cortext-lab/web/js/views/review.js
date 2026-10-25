@@ -4,6 +4,9 @@ import { db } from '../db.js';
 import { applyValidity } from '../trial.js';
 import { loadSession, exportSessionZip } from '../exporter.js';
 import { INVALID_REASONS } from '../schema.js';
+import { buildDataset } from '../dataset.js';
+
+let rebuildTimer = null;
 
 export async function renderReview(root, app, sessionId) {
   const { session, trials } = await loadSession(sessionId);
@@ -25,6 +28,9 @@ export async function renderReview(root, app, sessionId) {
     else applyValidity(t, { valid: false, reason: v, note: noteText ?? t.invalid_note, by: 'operator(review)' });
     await db.put('trials', t);
     draw();
+    // keep the shared dataset in sync with the reviewed validity flags
+    clearTimeout(rebuildTimer);
+    rebuildTimer = setTimeout(() => buildDataset(sessionId).catch(() => {}), 1500);
   }
   function draw() {
     tbody.replaceChildren(...trials.map((t) => {

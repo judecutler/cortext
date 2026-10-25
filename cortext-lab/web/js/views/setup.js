@@ -6,6 +6,7 @@ import { newSessionRecord } from '../session.js';
 import { listTrialTypes, getTrialType } from '../trialtypes/index.js';
 import { buildSetFromFiles, saveSet, listSets, getSet, materializeSet, stimuliSnapshot } from '../stimulusSets.js';
 import { db } from '../db.js';
+import { HeadMap, Traces, EEGFeed, mapValues } from '../brainviz.js';
 
 const MODE_HELP = {
   mcq_flash: 'The answer tiles stay on screen and light up one at a time (like a P300 speller). Afterwards you click the answer.',
@@ -100,13 +101,67 @@ export async function renderSetup(root, app) {
   const hwCard = h('div', { class: 'card' }, h('h2', {}, 'Hardware & prediction'),
     chk('photodiode', 'Photodiode square', 'White square in a screen corner during every stimulus (for hardware timing checks).'),
     sel('photodiode_corner', 'Photodiode corner', [['bottom-left', 'Bottom left'], ['bottom-right', 'Bottom right'], ['top-left', 'Top left'], ['top-right', 'Top right']]),
-    sel('predictor_mode', 'Predictor', [['mock', 'Mock (simulated; demo only)'], ['ws', 'WebSocket model server'], ['off', 'Off']], 'Mock uses the ground truth, so it is NOT evidence. Marked as such everywhere.'),
+    sel('predictor_mode', 'Predictor', [['eeg', 'Live EEG (headset → bridge P300 scorer)'], ['mock', 'Mock (simulated; demo only)'], ['ws', 'External model server (WebSocket)'], ['off', 'Off']], 'Live EEG scores the real headset in the bridge. Mock uses the ground truth, so it is NOT evidence.'),
     field('predictor_url', 'Predictor URL', h('input', { type: 'text', value: s.predictor_url, style: { width: '100%' } })),
     chk('show_bars', 'Live score bars under tiles', 'Flash mode, demo use only: it adds visible changes during flashing. Toggle with Shift+B.'));
 
+  // ---------- headset card (auto-detected from the bridge) ----------
+  const hsStatus = h('div', { class: 'hs-status' });
+  const hsChips = h('div', { class: 'qchips' });
+  const hsNote = h('div', { class: 'muted small' });
+  const hsMap = h('canvas', { class: 'headmap-sm' });
+  const hsTrace = h('canvas', { class: 'traces-sm' });
+  const headsetCard = h('div', { class: 'card headset-card span2' },
+    h('div', { class: 'card-head' }, h('h2', {}, 'Headset'), h('a', { class: 'btn small', href: '#/brain', target: '_blank', rel: 'noopener' }, 'Open neural monitor ↗')),
+    h('div', { class: 'hs-grid' }, h('div', {}, hsStatus, hsChips, hsNote), hsMap, hsTrace));
+  const headMap = new HeadMap(hsMap, { compact: true });
+  const traces = new Traces(hsTrace);
+  const feed = new EEGFeed({ traceSeconds: 4, traceMs: 300, erpMs: 60000 }).start();
+  let autofilled = false;
+  function deviceFor(eeg) {
+    if (eeg.simulated) return 'Simulated EEG (fake_eeg.py)';
+    if (/unicorn|bci core/i.test(eeg.device || '')) return 'g.tec Unicorn / BCI Core-8';
+    return eeg.channels >= 24 ? '32-node EEG' : eeg.channels >= 6 ? '8-node EEG' : eeg.channels === 4 ? 'Muse' : 'Other';
+  }
+  function updateHeadset() {
+    const b = app.bridge.status();
+    const eeg = b.eeg || {};
+    if (!b.connected) {
+      hsStatus.innerHTML = '<span class="dot red"></span><b>Bridge offline</b> — run <code>python cortext-lab/bridge/bridge.py</code> and open this page from http://localhost:8000';
+    } else if (!eeg.found) {
+      hsStatus.innerHTML = '<span class="dot red"></span><b>No headset stream</b> — run <code>python cortext-lab/eeg/stream_eeg.py</code> (or <code>eeg/fake_eeg.py</code> to simulate)' +
+        (eeg.error && !/pylsl/.test(eeg.error) ? '' : eeg.error ? `<div class="bad small">${eeg.error}</div>` : '');
+    } else {
+      const sc = eeg.scorer || {};
+      hsStatus.innerHTML = `<span class="dot ${eeg.simulated ? 'amber' : 'green'}"></span><b>${eeg.device || eeg.name}</b>${eeg.simulated ? ' <span class="pill warn">SIMULATED</span>' : ''}` +
+        `<div class="muted small mono">${eeg.channels} ch · ${eeg.measured_srate ?? '…'} Hz · ${(eeg.labels || []).join(' ')}</div>` +
+        `<div class="muted small mono">P300 scorer: ${sc.active ?? '–'}${sc.model_file ? ` (${sc.model_file})` : ''} · adapts after ${sc.adaptive_needs || '5 trials'}</div>` +
+        (eeg.analysis_error ? `<div class="warn small">${eeg.analysis_error}</div>` : '');
+      const q = eeg.quality || [];
+      hsChips.replaceChildren(...q.map((x) => h('span', { class: `qchip ${x.status}`, title: `${x.std_uv} µV (0.5–20 Hz std)` }, x.label, h('b', {}, x.status === 'good' ? '' : ` ${x.status}`))));
+      const bad = q.filter((x) => x.status !== 'good');
+      hsNote.textContent = !q.length ? '' : bad.length
+        ? `${bad.length} electrode(s) need attention: ${bad.map((x) => `${x.label} ${x.status} (${x.std_uv} µV)`).join(', ')}. Add gel / press the electrode on, sit still, then re-check.`
+        : 'All electrodes look good (5–40 µV in the 0.5–20 Hz band).';
+      if (!autofilled) {
+        autofilled = true;
+        device.value = deviceFor(eeg);
+        if (['mock', 'off'].includes(inputs.predictor_mode.value)) inputs.predictor_mode.value = 'eeg';
+        hsNote.textContent = `Auto-filled: device = ${device.value}, predictor = Live EEG. ` + hsNote.textContent;
+      }
+    }
+  }
+  feed.on(() => {
+    const tr = feed.trace;
+    headMap.draw(mapValues('alpha', tr, null) || {}, { quality: tr?.quality, title: 'alpha' });
+    traces.draw(tr);
+  });
+  const offHs = app.bridge.onChange(updateHeadset);
+  updateHeadset();
+
   const startBtn = h('button', { class: 'btn primary', onclick: start }, 'Start session');
   root.append(h('h1', {}, 'New session'),
-    h('div', { class: 'grid2' }, sessionCard, stimCard, designCard, flashCard, seqCard, respCard, hwCard),
+    h('div', { class: 'grid2' }, headsetCard, sessionCard, stimCard, designCard, flashCard, seqCard, respCard, hwCard),
     err, h('div', {}, startBtn, ' ', h('a', { class: 'btn', href: 'timing.html', target: '_blank', rel: 'noopener' }, 'Run timing test ↗')));
 
   function read() {
@@ -177,6 +232,7 @@ export async function renderSetup(root, app) {
   refresh();
   await refreshSources();
   await loadChosen();
+  return () => { feed.stop(); offHs(); };
 
   async function start() {
     err.textContent = '';
@@ -186,6 +242,7 @@ export async function renderSetup(root, app) {
     if (!stimuli) { err.textContent = 'The stimulus set could not be loaded.'; return; }
     if (cur.off_max_ms < cur.off_min_ms) { err.textContent = 'Gap max must be ≥ gap min.'; return; }
     if (cur.options_per_trial > stimuli.items.length) { err.textContent = 'More options per question than stimulus items.'; return; }
+    if (cur.predictor_mode === 'eeg' && !(app.bridge.status().eeg || {}).found) { err.textContent = 'Predictor is Live EEG but no headset stream is reaching the bridge. Start eeg/stream_eeg.py, or choose Mock.'; return; }
     if (cur.trial_type === 'mcq_sequential' && cur.show_model_probs && cur.predictor_mode === 'off') { err.textContent = 'Model probabilities need a predictor: choose Mock or WebSocket, or untick "Show model probability".'; return; }
     try { await db.getAll('sessions'); } catch (e) { err.textContent = 'Local storage (IndexedDB) is unavailable: ' + e.message; return; }
     saveSettings(cur);
