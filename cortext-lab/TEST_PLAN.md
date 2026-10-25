@@ -3,7 +3,7 @@
 ## A. Automated (about 1 minute)
 
 ```bash
-node --test tests/logic.test.mjs      # scheduler on a simulated 60 Hz clock, flash rules, trial/validity logic, CSV, ZIP
+node --test tests/*.mjs               # scheduler on a simulated 60 Hz clock, flash rules, trial/validity logic, CSV, ZIP
 python tests/test_bridge.py           # bridge: static files, WebSocket handshake, clock sync, markers -> CSV
 python tests/test_bridge_lsl.py       # needs pylsl: marker arrives on a real LSL inlet with a corrected timestamp
 python tests/e2e.py                   # needs playwright + chromium: full session in headless Chrome (screenshots in tests/screenshots/)
@@ -15,6 +15,8 @@ python tests/e2e_presets.py           # question list, shuffle buttons, presets 
 python tests/test_imagery.py         # imagery window: pipeline writes imagery.npz with the right labels and timing; plain sessions unchanged
 python tests/e2e_imagery.py          # imagery window in both modes: off by default, dark stage + fixation only, markers, 1 s settle before flashes
 python tests/e2e_panel.py             # run view: Hide/Show panel button and the I key
+python tests/test_voice.py            # voice endpoints against a FAKE LLM: custom context, honesty rules, missing key, CSRF; TTS if installed
+python tests/e2e_voice.py             # question aloud, audio-only stimuli (markers + latency), narrator before/after click, name kept out of data
 python tests/e2e_eeg.py               # simulated headset -> bridge -> dataset folder (occasionally flaky on the P300 amplitude check; rerun)
 ```
 

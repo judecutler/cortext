@@ -140,6 +140,47 @@ flag. Use those clicks as *feedback* ("the model said 60% for X, the person pick
 independent ground truth, and never evaluate the model on them. For `mcq_sequential` the **true answer is known from the
 question**; the click shows whether the person agreed with it, which is what makes it useful feedback.
 
+## Voice, audio stimuli and the narrator (demo)
+
+All free. Nothing needs an account unless you choose a cloud LLM.
+
+| Feature | Where | What happens |
+|---|---|---|
+| **Read the question aloud** | Experiment → Voice & audio | Spoken during the prompt. The stimuli start only after the voice has finished (+400 ms), so it never overlaps the EEG window. |
+| **Stimulus modality** | Experiment → Voice & audio | *Visual* (as before), *Audio* (each option is spoken; nothing changes on screen, the one-at-a-time view shows a static “Listen”), or *Audio + visual*. Uses the item's own audio file if the stimulus set has one (upload `dog.mp3` next to `dog.png`, or set `"audio"` in the config), otherwise speaks its text. |
+| **Narrator** | Experiment → Voice & audio (when), Setup → Voice & narrator (how) | After the EEG phase, announces the model's guess out loud with a caption: “Hmm... based on the brain patterns, I'm about 78% sure Jude saw the dog at option B.” *After the answer* (default, clean data) or *Before the answer* (show mode). |
+| **Narrator context** | Setup → Voice & narrator | Mood presets (warm, sports commentator, stage mind-reader, calm scientist, dry skeptic) and a free-text box for your own persona or experiment context. A fixed set of rules is always added after it: say the real percent and option, never claim certainty, and say “simulation” when the prediction is mock/simulated. Replies without the real percent are rejected. |
+
+**Voices.** The bridge makes speech files (cached in `bridge/logs/tts_cache/`) with the first engine that works:
+
+```bash
+pip install edge-tts      # Microsoft neural voices (free, no key, needs internet): best quality
+pip install pyttsx3       # the computer's own voices, offline (Windows/macOS built in; Linux needs espeak-ng)
+```
+
+With neither, the browser's built-in speech is used. It works, but its start time is not exact, so audio stimuli are then
+flagged `audio_timing: "approximate"`. For EEG with spoken stimuli, install one of the two.
+
+**Narrator text.** *Built-in lines* are instant and offline. For LLM-written lines (they follow the mood/context box),
+the bridge calls one of these. Keys stay in the bridge and never reach the browser:
+
+| Provider | Cost | Setup |
+|---|---|---|
+| Ollama | free, local, offline | install [ollama.com](https://ollama.com), `ollama pull llama3.2` |
+| OpenAI-compatible | Groq has a free tier; OpenAI/OpenRouter paid per use | `OPENAI_API_KEY`, `OPENAI_BASE_URL` (e.g. `https://api.groq.com/openai/v1`), `OPENAI_MODEL` (e.g. `llama-3.1-8b-instant`) |
+| Claude | paid per use (a fraction of a cent per line with Haiku) | `ANTHROPIC_API_KEY`, optional `ANTHROPIC_MODEL` |
+
+Set them as environment variables before `python bridge/bridge.py`, or in `bridge/voice.local.json` (git-ignored):
+`{"openai_base_url": "https://api.groq.com/openai/v1", "openai_api_key": "gsk_...", "openai_model": "llama-3.1-8b-instant"}`.
+If the LLM fails or takes over 5 s, the built-in line is used, so the demo never stalls. *Test voice* / *Test narrator*
+on the Setup tab try the whole chain.
+
+**What is stored.** Each trial gets `narration` {when, text, provider, model, mood, custom_context, …}; the session's
+settings keep the narrator context used. The *Name for the narrator* (Setup) stays in the browser: it is replaced by
+`{name}` in the stored text and never written to the session, markers or dataset. Note that a cloud LLM does receive it.
+*Before the answer* sets `model_display.narrated` and `model_shown_before_click`, so keep those clicks out of model
+evaluation, as with displayed probabilities. With the mock predictor the narrator always says it is a simulation.
+
 ## Trial flow (flash mode)
 
 1. **Prompt** (default 2 s): question + tiles (image, text, or both).
@@ -184,6 +225,10 @@ Every marker is one row in the page (IndexedDB → `markers.csv`), one JSON stri
 Events: `session_start`, `trial_start`, `prompt_on`, `flash_phase_start`, **`flash_on`**, `flash_off`,
 `flash_phase_end`, `response_cue`, `click`, `early_click`, `no_response`, `trial_end`, `trial_aborted`,
 `trial_invalid`, `trial_redo`, `pause`, `resume`, `session_end` (and `timing_flash` from the timing page).
+Voice features add `question_audio_start` / `question_audio_end` and `narration_start` / `narration_end`, and every
+`flash_on` carries `extra.modality` (`visual` / `audio` / `audiovisual`); for audio also `audio_engine`, `audio_timing`
+(`buffer` = sample-accurate Web Audio start, or `approximate` = browser speech fallback), `audio_latency_ms` (device output
+latency), `audio_offset_ms` (frame timestamp → sound reaching the speaker; shift audio epochs by this) and `audio_ms`.
 
 The bridge CSV adds `recv_perf_ms`, `bridge_t_ms`, `est_transit_ms` (receive time minus the page timestamp mapped into
 bridge time) and `lsl_timestamp`. **LSL timestamps**: the page runs 16 ping-pong rounds at connect and every 30 s

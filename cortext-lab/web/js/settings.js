@@ -36,6 +36,17 @@ export const DEFAULT_SETTINGS = {
   use_plan: false,                 // true: run the question list from the Experiment tab instead of generating questions
   shuffle_on_start: false,         // reshuffle the question list (order and images) every time a session starts
   order_mode: 'random',            // random | fixed: in a custom list, shuffle option order per trial or keep the listed order
+  // --- voice & audio (demo) ---
+  speak_question: false,           // read the question aloud before the stimuli (the stimuli wait until it has finished)
+  stim_modality: 'visual',         // visual | audio (spoken options, no visual change) | audiovisual (both together)
+  narrate: 'off',                  // off | after_click (narrator announces the model's guess after the answer) | before_click
+  narrator_llm: 'template',        // template (built in, offline) | ollama | openai | anthropic  (LLMs go through the bridge)
+  narrator_mood: 'default',        // a NARRATOR_MOODS preset, or 'custom'
+  narrator_context: '',            // the LLM's persona / mood / experiment context; '' = the chosen mood's text
+  tts_engine: 'auto',              // auto: bridge voice (edge-tts / OS) if installed, else the browser's | browser
+  tts_voice: '',                   // bridge voice name (edge-tts, e.g. en-US-AndrewMultilingualNeural); '' = default
+  browser_voice: '',               // speechSynthesis voice name; '' = best English voice found
+  tts_rate: 1,
   seed: null,
 };
 
@@ -77,8 +88,11 @@ export function patchSettings(partial) { saveSettings({ ...loadSettings(), ...pa
 
 const PARTICIPANT_KEY = 'cortext-lab.last-participant';
 /** Who is being recorded and with what: filled in on the Setup tab, read when an experiment starts. */
+// display_name is for the narrator only ("I'm 78% sure Jude saw the dog"). It stays in this browser and is never written
+// to the session record, markers or dataset (the participant ID is what identifies a recording).
 export function loadParticipant() {
-  try { return { participant: '', device: '', notes: '', ...JSON.parse(localStorage.getItem(PARTICIPANT_KEY) || '{}') }; } catch { return { participant: '', device: '', notes: '' }; }
+  const empty = { participant: '', device: '', notes: '', display_name: '' };
+  try { return { ...empty, ...JSON.parse(localStorage.getItem(PARTICIPANT_KEY) || '{}') }; } catch { return empty; }
 }
 export function saveParticipant(p) { try { localStorage.setItem(PARTICIPANT_KEY, JSON.stringify(p)); } catch { /* ignore */ } }
 

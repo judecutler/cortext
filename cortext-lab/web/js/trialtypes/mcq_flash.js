@@ -1,7 +1,6 @@
 // mcq_flash: prompt -> [optional imagery window] -> randomized option flashes (in place) -> click to declare answer -> (post phase in SessionRunner).
-import { sleep } from '../util.js';
 import { makeFlashPlan, runFlashPlan } from '../flasher.js';
-import { optFields, responsePhase, imageryPhase } from './common.js';
+import { optFields, responsePhase, promptPhase, stimulusOn, stimulusOff, narrateGuess, imageryPhase } from './common.js';
 
 export const mcqFlash = {
   id: 'mcq_flash',
@@ -24,8 +23,7 @@ export const mcqFlash = {
     try {
       // ---- 1. prompt ----
       ctx.setPhase('prompt');
-      await ctx.frame((ts) => { ui.showPrompt(); ctx.mark('prompt_on', {}, ts); });
-      await ctx.guard(sleep(s.prompt_ms));
+      await promptPhase(ctx, trial);
       await imageryPhase(ctx, trial);   // no-op unless imagery_ms > 0
 
       // ---- 2. flash ----
@@ -43,14 +41,14 @@ export const mcqFlash = {
         token: ctx.token,
         onOn: (ev, ts, res) => {
           const o = opt[ev.option_id];
-          ui.setFlash(ev.option_id, true);
-          const m = ctx.mark('flash_on', optFields(o, ev), ts);
+          const extra = stimulusOn(ctx, o, ts);
+          const m = ctx.mark('flash_on', { ...optFields(o, ev), extra }, ts);
           res.t_on_ms = m.t_ms; res.marker_seq = m.seq;
           trial.flash_order.push(res);
           predictor.noteFlash(m);
         },
         onOff: (ev, ts, aborted) => {
-          ui.setFlash(ev.option_id, false);
+          stimulusOff(ctx, opt[ev.option_id]);
           if (s.log_flash_off && !aborted) ctx.mark('flash_off', optFields(opt[ev.option_id], ev), ts);
         },
       }));
@@ -58,12 +56,20 @@ export const mcqFlash = {
       ctx.mark('flash_phase_end', {});
       trial.flash_timing = result.frame;
       ctx.reportTiming(result);
-      predictor.finishTrial().then((p) => {
+      const predP = predictor.finishTrial().then((p) => {
         if (p) { trial.prediction = p; ctx.save(); ui.updatePrediction?.(trial); }
+        return p;
       });
+      ctx.runner._predP = predP;   // the after-click narrator waits for it
 
-      // ---- 3. response ----
-      await responsePhase(ctx, trial);
+      // ---- 3. response (optionally the narrator announces the guess first: demo only, flagged as shown) ----
+      if (s.narrate === 'before_click') {
+        ui.setSub('Reading the brain signal…');
+        const pred = await ctx.guard(predP);
+        trial.model_display = { shown_wall_ms: Date.now(), source: pred?.source ?? null, narrated: true,
+          calibrated: !!pred?.probabilities_calibrated, probabilities: pred?.probabilities || null, scores: pred?.p300 || null };
+        await responsePhase(ctx, trial, { afterCue: () => narrateGuess(ctx, trial, pred, 'before_click') });
+      } else await responsePhase(ctx, trial);
     } finally {
       document.removeEventListener('visibilitychange', onVis);
     }

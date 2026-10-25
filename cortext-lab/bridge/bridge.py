@@ -32,6 +32,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wsproto  # noqa: E402
 import eeg_engine  # noqa: E402
+import voice  # noqa: E402  (TTS + LLM narration for the demo; all optional)
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "datasets", "cortext-p300"))
@@ -287,7 +288,24 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"data_root": store.display_path(store.data_root()), "sessions": self.state.inventory()})
         if path == "/api/storage":
             return self.send_json(self.storage_info(check=q.get("check", ["0"])[0] == "1"))
+        if path == "/api/voice/status":
+            return self.send_json({**voice.status(check=q.get("check", ["0"])[0] == "1"), "default_persona": voice.DEFAULT_PERSONA, "rules": voice.RULES})
+        if path == "/api/tts":
+            return self.send_tts(q)
         return super().do_GET()
+
+    def send_tts(self, q):
+        try:
+            data, ctype, eng = voice.synthesize(q.get("text", [""])[0], voice=q.get("voice", [None])[0],
+                                                rate=q.get("rate", ["1"])[0], engine=q.get("engine", [None])[0])
+        except voice.VoiceError as exc:
+            return self.send_json({"ok": False, "error": str(exc)}, 503)
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-TTS-Engine", eng)
+        self.end_headers()
+        self.wfile.write(data)
 
     def storage_info(self, check=False):
         rows = store.scan_local()
@@ -318,6 +336,11 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"ok": False, "error": "bad JSON"}, 400)
         sid = body.get("session_id")
         state = self.state
+        if path == "/api/narrate":
+            try:
+                return self.send_json(voice.narrate(body.get("provider"), body.get("facts") or {}, timeout=float(body.get("timeout", 6)), context=body.get("context")))
+            except voice.VoiceError as exc:
+                return self.send_json({"ok": False, "error": str(exc)})
         try:
             if path == "/api/dataset/build" and sid:
                 return self.send_json(state.build_dataset(sid, body.get("session"), body.get("trials")))

@@ -8,7 +8,8 @@ export const PRESET_VERSION = 1;
 /** Settings that belong to the experiment (the rig settings on the Setup tab are not part of a preset). */
 export const PRESET_KEYS = ['trial_type', 'stimuli_source', 'stimuli_url', 'n_trials', 'options_per_trial', 'tile_content', 'prompt_ms', 'imagery_ms',
   'repeats', 'on_ms', 'off_min_ms', 'off_max_ms', 'seq_on_ms', 'seq_gap_ms', 'seq_repeats', 'show_model_probs', 'send_feedback',
-  'feedback', 'post_mode', 'auto_advance_ms', 'response_timeout_ms', 'log_flash_off', 'show_bars', 'use_plan', 'order_mode', 'shuffle_on_start'];
+  'feedback', 'post_mode', 'auto_advance_ms', 'response_timeout_ms', 'log_flash_off', 'show_bars', 'use_plan', 'order_mode', 'shuffle_on_start',
+  'speak_question', 'stim_modality', 'narrate'];
 
 export const BUILTIN_PRESETS = {
   'Quick test (3 questions, fast)': {

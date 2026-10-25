@@ -1,9 +1,10 @@
 // SessionRunner: owns the trial queue, the per-trial lifecycle, operator actions (next / discard / redo / pause /
 // stop) and persistence. Trial types (trialtypes/*.js) only drive the phases of one trial.
 import { db, trialKey } from './db.js';
-import { mulberry32, median, mean, percentile } from './util.js';
+import { mulberry32, median, mean, percentile, sleep } from './util.js';
 import { makeTrialRecord, applyValidity } from './trial.js';
 import { getTrialType } from './trialtypes/index.js';
+import { narrateGuess } from './trialtypes/common.js';
 import { SCHEMA_VERSION } from './schema.js';
 
 export class InterruptError extends Error {
@@ -26,8 +27,9 @@ export function measureRefresh(frames = 40) {
 }
 
 export class SessionRunner {
-  constructor({ session, settings, stimuli, specs, markers, bridge, predictor, ui }) {
-    Object.assign(this, { session, settings, stimuli, markers, bridge, predictor, ui });
+  constructor({ session, settings, stimuli, specs, markers, bridge, predictor, ui, voice = null, displayName = '' }) {
+    Object.assign(this, { session, settings, stimuli, markers, bridge, predictor, ui, voice, displayName });
+    this._predP = null;
     this.queue = specs.slice();
     this.trials = [];
     this.current = null;
@@ -135,6 +137,7 @@ export class SessionRunner {
     this.bridge.quiet = false;
     this.ui.clearFlash?.();
     this._resp = null;
+    if (outcome !== 'complete') this.voice?.stopAll();   // cut the question / stimulus audio on redo, pause, discard ...
     if (outcome === 'tab_hidden') this._needStart = true;   // wait for the operator after the tab comes back
 
     if (outcome === 'complete') {
@@ -161,11 +164,26 @@ export class SessionRunner {
     this.setPhase('post');
     this._post = deferred();
     this.ui.showPost(trial, this);
+    // The narrator (demo): announces the model's guess after the answer. Auto-advance waits for it to finish.
+    const post = this._post;
+    this._noAuto = false;
+    let narr = Promise.resolve();
+    if (this.voice && this.settings.narrate === 'after_click') {
+      const ctx = this._makeCtx(trial, null);
+      narr = (async () => {
+        const pred = trial.prediction || await Promise.race([this._predP || Promise.resolve(null), sleep(7000)]);
+        if (this._post !== post) return;
+        await narrateGuess(ctx, trial, trial.prediction || pred, 'after_click');
+        if (this.current === trial) this.ui.updatePrediction?.(trial);
+      })().catch((e) => console.error(e));
+    }
     if (this.settings.post_mode === 'auto') {
-      this._autoTimer = setTimeout(() => this._post.resolve('next'), this.settings.auto_advance_ms);
+      narr.then(() => { if (this._post === post && !this._noAuto) this._autoTimer = setTimeout(() => post.resolve('next'), this.settings.auto_advance_ms); });
     }
     const outcome = await this._post.promise;
     clearTimeout(this._autoTimer);
+    this._post = null;
+    this.voice?.stopAll();
     this.ui.hidePost();
     if (this.settings.send_feedback) this.predictor.sendFeedback(trial);   // opt-in; only after the trial is over
     if (outcome === 'redo') {
@@ -183,7 +201,7 @@ export class SessionRunner {
   _makeCtx(trial, rng) {
     return {
       runner: this, settings: this.settings, ui: this.ui, markers: this.markers, bridge: this.bridge,
-      predictor: this.predictor, rng, token: this.token,
+      predictor: this.predictor, rng, token: this.token, voice: this.voice, displayName: this.displayName,
       mark: (event, fields = {}, frameMs = null) => this.markers.emit(event, { ...this._tf(trial), ...fields }, frameMs),
       frame: (fn) => new Promise((res) => requestAnimationFrame((ts) => { fn(ts); res(ts); })),
       guard: (p) => Promise.race([p, this._int.promise]),
@@ -239,6 +257,7 @@ export class SessionRunner {
     const t = this.current;
     if (this.phase === 'post' && t) {
       clearTimeout(this._autoTimer);
+      this._noAuto = true;
       if (t.valid) {
         applyValidity(t, { valid: false, reason: 'unspecified', by: 'operator' });
         this.markers.emit('trial_invalid', { ...this._tf(t), extra: { reason: 'unspecified' } });
