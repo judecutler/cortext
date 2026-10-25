@@ -34,6 +34,22 @@ export function mulberry32(seed) {
   };
 }
 
+/**
+ * Derive a well-mixed 32-bit seed from several integers (murmur3 finalizer). Plain arithmetic like
+ * (seed * 2654435761 + i) overflows double precision, so neighbouring trials got near-identical seeds and correlated
+ * shuffles (the correct answer kept landing first). Math.imul keeps everything in exact 32-bit integer math.
+ */
+export function mixSeed(...parts) {
+  let h = 0x811C9DC5;
+  for (const p of parts) {
+    h = Math.imul(h ^ (p >>> 0), 0x9E3779B1);
+    h ^= h >>> 15; h = Math.imul(h, 0x85EBCA6B);
+    h ^= h >>> 13; h = Math.imul(h, 0xC2B2AE35);
+    h ^= h >>> 16;
+  }
+  return h >>> 0;
+}
+
 export function shuffle(arr, rng = Math.random) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {

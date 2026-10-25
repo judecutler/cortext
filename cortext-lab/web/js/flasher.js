@@ -8,15 +8,16 @@ import { shuffle, median, mean, stdev, percentile } from './util.js';
  * Build the flash sequence. Each "repeat" is a random permutation of all options, with the extra rule that the
  * first flash of a repeat never equals the last flash of the previous repeat (no immediate re-flash).
  * With fixedOrder every repeat uses optionIds exactly as given (a hand-made sequence from a preset).
+ * With firstRoundInOrder only the first repeat does (one-at-a-time mode: A is shown first, then B, C, D), later repeats are random.
  * Times are relative to flash-phase start, in ms.
  */
-export function makeFlashPlan({ optionIds, repeats = 10, onMs = 500, offMinMs = 100, offMaxMs = 200, rng = Math.random, fixedOrder = false }) {
+export function makeFlashPlan({ optionIds, repeats = 10, onMs = 500, offMinMs = 100, offMaxMs = 200, rng = Math.random, fixedOrder = false, firstRoundInOrder = false }) {
   if (optionIds.length < 2) throw new Error('need at least 2 options to avoid repeating the same flash');
   const events = [];
   let prev = null;
   let t = 0;
   for (let r = 0; r < repeats; r++) {
-    let perm = fixedOrder ? optionIds.slice() : shuffle(optionIds, rng);
+    let perm = fixedOrder || (firstRoundInOrder && r === 0) ? optionIds.slice() : shuffle(optionIds, rng);
     if (!fixedOrder && perm[0] === prev) {
       const j = 1 + Math.floor(rng() * (perm.length - 1));
       [perm[0], perm[j]] = [perm[j], perm[0]];

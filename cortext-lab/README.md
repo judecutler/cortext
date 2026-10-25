@@ -31,7 +31,7 @@ select `CorTextMarkers` **and** the EEG stream, *Start*, then run the session. T
 indicators for: bridge connection, LSL outlet, LSL recorder attached, EEG stream present/delivering samples.
 
 Hotkeys (run view): `Space`/`Enter` next/start · `Backspace` discard · `R` redo question · `1–4` or `A–D` choose answer ·
-`P` pause · `M` Researcher/Demo mode · `I` info panel · `Shift+F` fullscreen · `Shift+B` live score bars · `N` next session
+`P` pause · `M` Researcher/Demo mode · `V` voice on/off (if "Voice on (demo)" was ticked at Start) · `I` info panel · `Shift+F` fullscreen · `Shift+B` live score bars · `N` next session
 (on the end screen). Everywhere: `Ctrl/⌘+Z` undo, `Ctrl/⌘+Shift+Z` (or `Ctrl+Y`) redo.
 
 ## Live EEG, cleaning and the shared dataset

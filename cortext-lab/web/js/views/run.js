@@ -60,7 +60,7 @@ export function renderRun(root, app) {
     h('a', { class: 'btn small', href: `#/review/${session.session_id}`, target: '_blank', rel: 'noopener' }, 'Review table ↗'));
   const dev = h('aside', { class: 'dev' },
     h('div', { class: 'card' }, h('h3', {}, 'Controls'), ctrl,
-      h('div', { class: 'kbdhelp', style: { marginTop: '6px' } }, 'Space/Enter next · Backspace discard · R redo question · Ctrl/⌘Z undo · 1–4 / A–D choose · P pause · M mode · I panel · Shift+F fullscreen · Shift+B bars · N next session (at the end)')),
+      h('div', { class: 'kbdhelp', style: { marginTop: '6px' } }, 'Space/Enter next · Backspace discard · R redo question · Ctrl/⌘Z undo · 1–4 / A–D choose · P pause · M mode · V voice · I panel · Shift+F fullscreen · Shift+B bars · N next session (at the end)')),
     mkSec('conn', 'Connections'), mkSec('eeg', 'EEG headset'), mkSec('sess', 'Session'), mkSec('count', 'Valid trials & repeats per class'),
     mkSec('timing', 'Timing'), mkSec('list', 'Trials'), mkSec('log', 'Marker log'));
   // The info panel can be hidden (keeps the top navigation, unlike Demo view). Remembered per browser.
@@ -445,6 +445,7 @@ export function renderRun(root, app) {
     else if (k === 'r' || k === 'R') runner.redo();
     else if (k === 'p' || k === 'P') runner.togglePause();
     else if (k === 'm' || k === 'M') app.toggleMode();
+    else if (k === 'v' || k === 'V') toggleVoice();
     else if (k === 'i' || k === 'I') setPanel(!panelOpen);
     else if (k === 'F') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.(); }
     else if (k === 'B') { settings.show_bars = !settings.show_bars; stage.classList.toggle('show-bars', settings.show_bars); }
@@ -453,6 +454,16 @@ export function renderRun(root, app) {
       const opt = idx >= 0 ? trial.options.find((o) => o.position === idx) : null;
       if (opt) runner.tileClick(opt.id, e.timeStamp);
     }
+  }
+  // Demo "Voice on" toggle (V): question read aloud + option names spoken. Applies from the next trial; each trial
+  // records what it actually did (question_audio markers, audio_stimuli), so the session stays honest.
+  function toggleVoice() {
+    if (!voice) { toast('Voice was off when this session started: tick “Voice on (demo)” on the Experiment tab, then Start.', 'warn'); return; }
+    const on = !(settings.speak_question && settings.stim_modality === 'audiovisual');
+    settings.voice_on = on;
+    settings.speak_question = on;
+    settings.stim_modality = on ? 'audiovisual' : 'visual';
+    toast(on ? 'Voice on: question and option names are spoken (from the next question).' : 'Voice off (from the next question).', 'good');
   }
   document.addEventListener('keydown', onKey);
   const onUnload = (e) => { if (runner.phase !== 'finished') { e.preventDefault(); e.returnValue = ''; } };

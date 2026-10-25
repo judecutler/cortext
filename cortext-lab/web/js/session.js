@@ -1,7 +1,7 @@
 // SessionRunner: owns the trial queue, the per-trial lifecycle, operator actions (next / discard / redo / pause /
 // stop) and persistence. Trial types (trialtypes/*.js) only drive the phases of one trial.
 import { db, trialKey } from './db.js';
-import { mulberry32, median, mean, percentile, sleep } from './util.js';
+import { mulberry32, mixSeed, median, mean, percentile, sleep } from './util.js';
 import { makeTrialRecord, applyValidity } from './trial.js';
 import { getTrialType } from './trialtypes/index.js';
 import { narrateGuess } from './trialtypes/common.js';
@@ -107,7 +107,7 @@ export class SessionRunner {
     const type = getTrialType(spec.type);
     const trialId = s.next_trial_id++;
     const attempt = spec._attempt || 0;
-    const seed = (s.seed * 2654435761 + trialId * 97) >>> 0;
+    const seed = mixSeed(s.seed, trialId);
     const rng = mulberry32(seed);
     const trial = makeTrialRecord({ sessionId: s.session_id, spec, trialId, attempt, rng, settings: this.settings, byId: this.byId });
     trial.rng_seed = seed;

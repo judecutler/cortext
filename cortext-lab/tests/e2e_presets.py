@@ -3,7 +3,7 @@
 import os, subprocess, sys, time, urllib.request
 from playwright.sync_api import sync_playwright
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from pw_helpers import set_participant  # noqa: E402
+from pw_helpers import field, set_participant  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 9300 + os.getpid() % 90
@@ -68,6 +68,7 @@ def main():
             page.check("text=Use this list for the session >> xpath=../..//input[@type=checkbox]") if False else None
             page.evaluate("document.querySelector('.planlist').closest('.card').querySelector('input[type=checkbox]').click()")
             page.locator("select").filter(has_text="Exactly as listed").select_option("fixed")
+            field(page, "Re-shuffle this list every time a session starts").locator("input").uncheck()   # on by default now
             expected = [page.eval_on_selector_all(f".planrow:nth-child({i}) .chip-name", "e => e.map(x => x.textContent)") for i in (1, 2)]
             page.click("text=Start session")
             page.wait_for_function("window.cortext && window.cortext.runner && window.cortext.runner.phase === 'ready'", timeout=30000)
