@@ -86,7 +86,8 @@ def main():
                 time.sleep(0.1)
         # static + status
         cfg = json.load(urllib.request.urlopen(f"http://127.0.0.1:{PORT}/config/stimuli.json"))
-        assert len(cfg["items"]) == 12
+        with open(os.path.join(ROOT, "web", "config", "stimuli.json"), encoding="utf-8") as fh:
+            assert cfg == json.load(fh), "the bridge must serve the sample stimulus set as it is on disk"
         status = json.load(urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/status"))
         assert status["lsl_available"] is False
 
