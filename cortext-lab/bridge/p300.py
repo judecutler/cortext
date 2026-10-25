@@ -25,8 +25,20 @@ REJECT_UV = 100.0         # an epoch whose filtered, baseline-corrected signal e
 # Channels whose 1-20 Hz signal is above this std are flagged "noisy" (a clean P300-band EEG is ~5-25 uV std).
 NOISY_STD_UV = 40.0
 FLAT_STD_UV = 0.5
-PARIETAL = ["Pz", "POz", "Cz", "PO7", "PO8", "Oz", "PO3", "PO4", "P3", "P4", "CPz"]
+# TP9/TP10 are the Muse's P300 sites (temporo-parietal, referenced to Fpz); they are not on the Unicorn, so its picks
+# are unchanged.
+PARIETAL = ["Pz", "POz", "Cz", "PO7", "PO8", "Oz", "PO3", "PO4", "P3", "P4", "CPz", "TP9", "TP10"]
 UNICORN_MONTAGE = ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "POz", "PO8"]
+MUSE_MONTAGE = ["TP9", "AF7", "AF8", "TP10"]        # Muse 2 / Muse S / Muse 2016, as muselsl names them, 256 Hz
+
+
+def reject_picks(labels):
+    """Channels the artifact threshold looks at. Forehead channels (Fp*, AF*) are left out when the headset has others:
+    on a Muse every blink is 100+ uV at AF7/AF8 and would throw away the epoch although the P300 channels (TP9/TP10)
+    are fine. None = check every channel (the Unicorn has no Fp/AF channels, so nothing changes for it)."""
+    labels = [str(l) for l in (labels or [])]
+    keep = [i for i, l in enumerate(labels) if not l.upper().startswith(("FP", "AF"))]
+    return keep if keep and len(keep) < len(labels) else None
 
 
 class CausalFilter:
@@ -52,11 +64,12 @@ def n_bins():
     return int(round((TMAX - TMIN) * 1000 / BIN_MS))
 
 
-def epoch(ts, data, onset, reject_uv=REJECT_UV):
+def epoch(ts, data, onset, reject_uv=REJECT_UV, check=None):
     """Return a (n_channels, n_bins) baseline-corrected epoch for one onset, or None if the data doesn't cover it.
 
     ts: (n,) sample timestamps in seconds (sorted); data: (n, C) filtered microvolts; onset: seconds.
     reject_uv: the running filter chain's artifact threshold (default REJECT_UV).
+    check: channel indices the threshold applies to (reject_picks(labels)); None = all channels.
     """
     lo = np.searchsorted(ts, onset + BASELINE[0], "left")
     hi = np.searchsorted(ts, onset + TMAX, "right")
@@ -68,7 +81,7 @@ def epoch(ts, data, onset, reject_uv=REJECT_UV):
     if len(base) == 0:
         return None
     x = x - base.mean(axis=0)
-    if np.abs(x).max() > reject_uv:
+    if np.abs(x if check is None else x[:, check]).max() > reject_uv:
         return None  # artifact (blink, movement, loose electrode): reject rather than let it drive the score
     nb = n_bins()
     idx = np.floor((t - TMIN) * 1000 / BIN_MS).astype(int)
@@ -81,9 +94,9 @@ def epoch(ts, data, onset, reject_uv=REJECT_UV):
     return out
 
 
-def epochs(ts, data, onsets, reject_uv=REJECT_UV):
+def epochs(ts, data, onsets, reject_uv=REJECT_UV, check=None):
     """List of epochs (None where not covered or rejected as an artifact)."""
-    return [epoch(ts, data, o, reject_uv) for o in onsets]
+    return [epoch(ts, data, o, reject_uv, check) for o in onsets]
 
 
 def heuristic_score(ep, labels):

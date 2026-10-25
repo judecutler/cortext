@@ -3,6 +3,8 @@
 
     python tests/e2e_showtime.py              # simulated headset with a 5 uV P300 (default)
     python tests/e2e_showtime.py --p300-uv 0  # control: no P300 in the signal (should sit near chance, modest %)
+    python tests/e2e_showtime.py --muse       # the same demo on a simulated Muse (4 ch + AUX, 256 Hz): the bridge
+                                              # must swap in the Muse p3000 function and its filter chain by itself
 
 Checks the defaults are the demo flow (one at a time x3, 5 s question read aloud, Live EEG, narrator before the click),
 that the running model is the p3000 function from the first trial (no calibration), that each trial goes question ->
@@ -51,11 +53,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--p300-uv", type=float, default=5.0)
     ap.add_argument("--trials", type=int, default=8)
+    ap.add_argument("--muse", action="store_true", help="simulate a Muse headband instead of the 8-channel Unicorn")
     a = ap.parse_args()
     tmp = tempfile.mkdtemp(prefix="cortext-show-")
     env = {**os.environ, "CORTEXT_DATASET_DIR": os.path.join(tmp, "ds"), "CORTEXT_DATA_DIR": os.path.join(tmp, "data"),
            "CORTEXT_BRIDGE_LOG_DIR": os.path.join(tmp, "logs")}
-    fake = subprocess.Popen([sys.executable, os.path.join(ROOT, "eeg", "fake_eeg.py"), "--seed", "11", "--p300-uv", str(a.p300_uv)],
+    fake = subprocess.Popen([sys.executable, os.path.join(ROOT, "eeg", "fake_eeg.py"), "--seed", "11", "--p300-uv", str(a.p300_uv)]
+                            + (["--muse"] if a.muse else []),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     bridge = subprocess.Popen([sys.executable, os.path.join(ROOT, "bridge", "bridge.py"), "--port", str(PORT)], env=env,
                               stdout=open(os.path.join(tmp, "bridge.log"), "w"), stderr=subprocess.STDOUT)
@@ -70,7 +74,11 @@ def main():
                 pass
             time.sleep(0.2)
         sc = st["eeg"]["scorer"]
-        assert sc["active"] == "model" and sc["model_file"].endswith("p3000_function.npz"), sc
+        model_name = "p3000_function_muse.npz" if a.muse else "p3000_function.npz"
+        assert sc["active"] == "model" and sc["model_file"].endswith(model_name), sc
+        assert not sc["model_error"] and not sc["model_filter_mismatch"], sc
+        if a.muse:
+            assert st["eeg"]["labels"] == ["TP9", "AF7", "AF8", "TP10"] and st["eeg"]["dropped_channels"] == ["Right AUX"], st["eeg"]
         print(f"bridge: running model {os.path.basename(sc['model_file'])} from models/active/ before any trial: OK")
 
         with sync_playwright() as p:
@@ -94,7 +102,7 @@ def main():
             page.fill("input[placeholder='e.g. P01']", "P01")
             page.fill("input[placeholder='e.g. Jude (optional)']", "Jude")
             page.wait_for_selector("#agentSummary >> text=Live EEG")
-            page.wait_for_selector("#agentSummary >> text=p3000_function.npz", timeout=15000)   # once the bridge status arrives
+            page.wait_for_selector(f"#agentSummary >> text={model_name}", timeout=15000)   # once the bridge status arrives
             set_num(page, "Questions", a.trials)
             page.click("text=Start session")
             phase(page, "ready")

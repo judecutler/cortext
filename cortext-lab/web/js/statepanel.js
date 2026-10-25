@@ -31,7 +31,7 @@ export function createStatePanel(feed) {
     h('div', { class: 'panel-title' }, 'Vibe meter', h('span', { class: 'muted small' }, 'just for fun · not validated')),
     h('div', { class: 'vibes' }, ...STATES.map((s) => rows[s.key].el)),
     note,
-    h('div', { class: 'muted small' }, '50 = your own recent average. Crude band-power ratios from 8 electrodes; jaw tension and blinks can move them.'));
+    h('div', { class: 'muted small' }, '50 = your own recent average. Crude band-power ratios from the headset's electrodes; jaw tension and blinks can move them.'));
 
   let lastTrace = null;
   const off = feed.on(() => {

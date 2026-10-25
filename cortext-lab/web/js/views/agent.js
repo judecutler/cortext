@@ -302,7 +302,7 @@ export async function renderAgent(root, app, focus) {
     const T = types();
     const parts = [];
     parts.push(node({ key: 'input', kind: 'Input', title: eeg.found ? (eeg.simulated ? 'Simulated EEG' : (eeg.device || eeg.name || 'Headset')) : 'No headset',
-      sub: eeg.found ? `${eeg.channels} ch · ${eeg.measured_srate ?? eeg.nominal_srate ?? '?'} Hz` : (b.connected ? 'start eeg/stream_eeg.py' : 'bridge offline'),
+      sub: eeg.found ? `${eeg.channels} ch · ${eeg.measured_srate ?? eeg.nominal_srate ?? '?'} Hz` : (b.connected ? 'start eeg/stream_eeg.py or stream_muse.py' : 'bridge offline'),
       cls: eeg.found ? (eeg.simulated ? 'warn' : '') : 'off', stage: 0 }));
     parts.push(wire());
     parts.push(insertSlot(0));
@@ -469,7 +469,7 @@ export async function renderAgent(root, app, focus) {
         'What arrives from the headset over LSL, before any filtering. Electrode quality is always judged with a fixed 0.5–20 Hz reference filter, so the chips mean the same thing whatever chain runs.'),
         h('div', { class: 'ins-grid' },
           h('div', {},
-            eeg.found ? h('div', { class: 'mono small' }, `${eeg.channels} channels · ${eeg.measured_srate ?? '…'} Hz measured · delay ${eeg.delay_ms ?? '?'} ms${eeg.simulated ? ' · SIMULATED' : ''}`) : h('div', { class: 'warn small' }, 'Start eeg/stream_eeg.py (or eeg/fake_eeg.py).'),
+            eeg.found ? h('div', { class: 'mono small' }, `${eeg.channels} channels · ${eeg.measured_srate ?? '…'} Hz measured · delay ${eeg.delay_ms ?? '?'} ms${eeg.simulated ? ' · SIMULATED' : ''}`) : h('div', { class: 'warn small' }, 'Start eeg/stream_eeg.py (Unicorn), eeg/stream_muse.py (Muse), or eeg/fake_eeg.py.'),
             h('div', { class: 'qchips' }, ...q.map((x) => h('span', { class: `qchip ${x.status}`, title: `${x.std_uv} µV` }, x.label, h('b', {}, x.status === 'good' ? '' : ` ${x.status}`)))),
             h('div', { style: { marginTop: '8px' } }, h('a', { class: 'btn small', href: '#/experiment' }, 'Headset card on Experiment →'), ' ', h('a', { class: 'btn small', href: '#/eeg' }, 'EEG monitor →'))),
           h('div', {}, h('h3', {}, `Raw signal, ${channel}`), plot, insPlot.legend)));
@@ -643,7 +643,7 @@ export async function renderAgent(root, app, focus) {
   function paintChannels() {
     const labels = info?.labels?.length ? info.labels : [];
     if (!labels.length) { chanSel.replaceChildren(h('option', { value: channel }, channel)); return; }
-    if (!labels.includes(channel)) channel = labels.includes('Pz') ? 'Pz' : labels[0];
+    if (!labels.includes(channel)) channel = labels.includes('Pz') ? 'Pz' : labels.includes('TP9') ? 'TP9' : labels[0];
     if ([...chanSel.options].map((o) => o.value).join() !== labels.join()) chanSel.replaceChildren(...labels.map((l) => h('option', { value: l }, l)));
     chanSel.value = channel;
   }

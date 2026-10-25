@@ -251,7 +251,10 @@ def build(session_id, trials=None, session=None, out_root=None, log_dir=LOG_DIR,
     bad, why, std_before = find_bad_channels(clean_all, labels)
     clean_all, interpolated = interpolate_bad(clean_all, labels, bad)
     good_idx = [i for i in range(len(labels)) if i not in bad]
-    art = artifact_mask(clean_all, srate, good_idx)
+    # forehead channels (Fp*/AF*) don't flag epochs when there are others: on a Muse every blink is 100+ uV at AF7/AF8
+    # while the P300 channels TP9/TP10 are fine (same rule as the live scorer, bridge/p300.py reject_picks)
+    art_idx = [i for i in good_idx if not str(labels[i]).upper().startswith(("FP", "AF"))] or good_idx
+    art = artifact_mask(clean_all, srate, art_idx)
 
     # ---- epochs on flash onsets
     valid_map = trial_validity(markers, trials)

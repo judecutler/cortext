@@ -435,7 +435,7 @@ def preview(spec, ts, raw, labels, srate, channel=None, show_s=4.0, out_hz=125.0
     import numpy as np
     from scipy.signal import welch
     chain = Chain(spec, srate, labels)
-    ch = labels.index(channel) if channel in labels else (labels.index("Pz") if "Pz" in labels else 0)
+    ch = labels.index(channel) if channel in labels else next((labels.index(c) for c in ("Pz", "TP9", "TP10") if c in labels), 0)
     n_show = min(len(ts), int(show_s * srate))
     step = max(1, int(round(srate / out_hz)))
     nper = int(min(n_show, srate * 2))
@@ -458,11 +458,13 @@ def preview(spec, ts, raw, labels, srate, channel=None, show_s=4.0, out_hz=125.0
     y = chain.stages(raw)[-1][1][-n_show:]
     win, hop, b0 = int(0.9 * srate), int(0.25 * srate), int(0.1 * srate)
     n_win = n_bad = 0
+    from p300 import reject_picks
+    check = reject_picks(labels)
     for s0 in range(0, max(0, len(y) - win), hop):
         seg = y[s0:s0 + win]
         seg = seg - seg[:b0].mean(axis=0)
         n_win += 1
-        n_bad += bool(np.abs(seg).max() > chain.reject_uv)
+        n_bad += bool(np.abs(seg if check is None else seg[:, check]).max() > chain.reject_uv)
     return {"ok": True, "channel": labels[ch], "labels": labels, "srate": srate, "trace_hz": srate / step,
             "seconds": n_show / srate, "filtered_seconds": round(len(ts) / srate, 1), "stages": stages,
             "reject_uv": chain.reject_uv, "reject_estimate": {"windows": n_win, "rejected": n_bad},

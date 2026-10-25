@@ -16,6 +16,7 @@ export const predictorName = (m) => ({ eeg: 'Live EEG', mock: 'Mock (simulated)'
 function deviceFor(eeg) {
   if (eeg.simulated) return 'Simulated EEG (fake_eeg.py)';
   if (/unicorn|bci core/i.test(eeg.device || '')) return 'g.tec Unicorn / BCI Core-8';
+  if (/muse/i.test(eeg.device || eeg.name || '')) return 'Muse';
   return eeg.channels >= 24 ? '32-node EEG' : eeg.channels >= 6 ? '8-node EEG' : eeg.channels === 4 ? 'Muse' : 'Other';
 }
 
@@ -73,7 +74,7 @@ export function headsetCard(app, { onFirstStream } = {}) {
     if (!b.connected) {
       hsStatus.innerHTML = '<span class="dot red"></span><b>Bridge offline</b> — run <code>python cortext-lab/bridge/bridge.py</code> and open this page from http://localhost:8000';
     } else if (!eeg.found) {
-      hsStatus.innerHTML = '<span class="dot red"></span><b>No headset stream</b> — run <code>python cortext-lab/eeg/stream_eeg.py</code> (or <code>eeg/fake_eeg.py</code> to simulate)' +
+      hsStatus.innerHTML = '<span class="dot red"></span><b>No headset stream</b> — run <code>python cortext-lab/eeg/stream_eeg.py</code> (Unicorn), <code>eeg/stream_muse.py</code> (Muse) (or <code>eeg/fake_eeg.py</code> to simulate)' +
         (eeg.error && !/pylsl/.test(eeg.error) ? '' : eeg.error ? `<div class="bad small">${eeg.error}</div>` : '');
     } else {
       const sc = eeg.scorer || {};

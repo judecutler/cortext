@@ -46,9 +46,25 @@ def _labels_from_info(info, n):
     except Exception:
         pass
     if len(labels) != n or not all(labels):
-        labels = list(P.UNICORN_MONTAGE) if (P and n == 8) else [f"Ch{i + 1}" for i in range(n)]
+        try:
+            name = (info.name() + " " + info.type()).lower()
+        except Exception:
+            name = ""
+        if P and n == 8:
+            labels = list(P.UNICORN_MONTAGE)
+        elif P and n in (4, 5) and any(k in name for k in ("muse", "petal")):   # Muse streamers without channel names
+            labels = list(P.MUSE_MONTAGE) + (["Right AUX"] if n == 5 else [])
+        else:
+            labels = [f"Ch{i + 1}" for i in range(n)]
         units = ["uV"] * n
     return labels, units
+
+
+def _keep_channels(labels):
+    """Indices of the channels the bridge uses. Inputs named AUX (the Muse's unconnected "Right AUX" that muselsl
+    streams) are dropped: nothing is plugged in, so they are pure noise and would turn a quality chip red."""
+    keep = [i for i, l in enumerate(labels) if "aux" not in str(l).lower()]
+    return keep or list(range(len(labels)))
 
 
 class EEGEngine:
@@ -62,6 +78,8 @@ class EEGEngine:
         self.info = {"found": False}
         self.labels, self.srate = [], 0.0
         self.scale = 1.0
+        self.ts_shift = None         # seconds added to EEG stamps (wall-clock streamers), decided on the first chunk
+        self.keep = None             # channel indices kept from the stream (None = all; Muse: AUX dropped)
         self.ts = None
         self.raw = None
         self.filt = None
@@ -192,10 +210,15 @@ class EEGEngine:
         full = inlet.info(timeout=2.0)
         n = full.channel_count()
         labels, units = _labels_from_info(full, n)
+        keep = _keep_channels(labels)
+        dropped = [labels[i] for i in range(n) if i not in keep]
+        labels, units, n = [labels[i] for i in keep], [units[i] for i in keep], len(keep)
         simulated = "FAKE" in full.name().upper() or (full.desc().child_value("simulated") == "true")
         scale = 1e6 if units and all(u.lower() in ("v", "volts") for u in units) else (1e3 if units and units[0].lower() == "mv" else 1.0)
         with self.lock:
             self.labels, self.srate, self.scale = labels, full.nominal_srate() or 250.0, scale
+            self.keep = keep if len(keep) != full.channel_count() else None
+            self.ts_shift = None
             self.ts = self.raw = self.filt = self.qfilt = None
             self.qfilter = P.CausalFilter(self.srate, n) if P else None
             self.filter = self._build_chain(self.filter_spec) if P else None
@@ -203,12 +226,35 @@ class EEGEngine:
                          "nominal_srate": self.srate, "measured_srate": None, "age_ms": None, "simulated": simulated,
                          "source_id": full.source_id(), "hostname": full.hostname(),
                          "device": "Simulated EEG (fake_eeg.py)" if simulated else self._guess_device(full, labels),
-                         "quality": [], "bands": {}, "recording": None}
+                         "quality": [], "bands": {}, "recording": None, "dropped_channels": dropped}
             if self.session_id and not self.csv_file:
                 self._open_csv()
         if self.scorer:
             self.scorer.on_stream(labels)
+            self._match_p3000(labels)
         return inlet
+
+    def _match_p3000(self, labels):
+        """The demo runs the untrained "p3000 function". There is one per headset layout (8-channel Unicorn, Muse); if the
+        one picked doesn't fit the headset that just connected, switch to the library's p3000 function that does, and to
+        the filter chain it was built for. Trained models are never swapped: they belong to one person and headset."""
+        sc = self.scorer
+        m = sc.model
+        if m is None or (m.meta or {}).get("kind") != "p3000 function" or not sc.model_error:
+            return
+        try:
+            import models as M
+            for name in M._npz(M.library_dir()):
+                path = os.path.join(M.library_dir(), name)
+                c = P.LinearP300.load(path)
+                if (c.meta or {}).get("kind") != "p3000 function" or any(l not in labels for l in c.labels):
+                    continue
+                if c.filter_signature != self.running_signature:
+                    self.set_filters(c.filters, f"chain of {name} (matches this headset)")
+                sc.set_model(path, f"auto: {name} fits this headset ({', '.join(labels)})")
+                return
+        except Exception as exc:          # never let this stop acquisition; the Agent page still lets you pick
+            print("  p3000 auto-switch failed:", exc)
 
     @staticmethod
     def _guess_device(info, labels):
@@ -219,6 +265,8 @@ class EEGEngine:
             pass
         if labels == ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "POz", "PO8"]:
             return "g.tec Unicorn / BCI Core-8" + (f" ({serial})" if serial else "")
+        if labels == ["TP9", "AF7", "AF8", "TP10"]:
+            return f"Muse ({info.name()})"
         return f"{info.name()} ({info.channel_count()} ch)"
 
     def _ingest(self, chunk, stamps):
@@ -226,6 +274,18 @@ class EEGEngine:
         offset = self.state.clock_offset_ms
         lsl_minus_perf_ms = pl.local_clock() * 1000.0 - time.perf_counter() * 1000.0
         with self.lock:
+            if self.keep is not None:
+                chunk = [[row[i] for i in self.keep] for row in chunk]
+            if self.ts_shift is None and stamps:
+                # muselsl (without --lsltime) and some other streamers stamp samples with the wall clock (time.time(),
+                # ~1.7e9 s) instead of LSL's local_clock(). Markers use LSL time, so shift those stamps onto it.
+                lc, wall = pl.local_clock(), time.time()
+                self.ts_shift = (lc - wall) if (abs(stamps[-1] - lc) > 1e5 and abs(stamps[-1] - wall) < 60) else 0.0
+                if self.ts_shift:
+                    self.info["clock_note"] = "EEG timestamps were wall-clock time; shifted onto the LSL clock"
+                    print("  EEG: stream uses wall-clock timestamps (e.g. muselsl without --lsltime); correcting them")
+            if self.ts_shift:
+                stamps = [t + self.ts_shift for t in stamps]
             if self.csv_writer:
                 for row, t in zip(chunk, stamps):
                     page_t = "" if offset is None else round(t * 1000.0 - lsl_minus_perf_ms - offset, 3)
@@ -525,7 +585,7 @@ class P300Scorer:
         ts, x = self.engine.window(min(onsets) + P.BASELINE[0] - 0.05)
         if ts is None or not len(ts):
             return None, None, None
-        eps = P.epochs(ts, x, onsets, self.engine.reject_uv)
+        eps = P.epochs(ts, x, onsets, self.engine.reject_uv, P.reject_picks(self.engine.labels))
         rows = [(e.ravel(), int(f[2]), f[1]) for e, f in zip(eps, flashes) if e is not None]
         if not rows:
             return None, None, None
@@ -626,7 +686,7 @@ class P300Scorer:
         ts, x = self.engine.window(min(onsets) + P.BASELINE[0] - 0.05)
         if ts is None or not len(ts):
             return {"error": "no EEG data for this trial"}
-        eps = P.epochs(ts, x, onsets, self.engine.reject_uv)
+        eps = P.epochs(ts, x, onsets, self.engine.reject_uv, P.reject_picks(self.engine.labels))
         labels = list(self.engine.labels)
         scores = []
         for e in eps:

@@ -44,8 +44,9 @@ def live_features(root, session_folder, spec=None):
     chain = F.Chain(spec or F.DEFAULT_SPEC, float(raw["srate"]), labels)
     y = chain(x)
     feats, keep = [], []
+    check = P.reject_picks(labels)
     for i, onset in enumerate(ep["onset_lsl"]):
-        e = P.epoch(ts, y, float(onset), chain.reject_uv)
+        e = P.epoch(ts, y, float(onset), chain.reject_uv, check)
         if e is not None:
             feats.append(e.ravel())
             keep.append(i)

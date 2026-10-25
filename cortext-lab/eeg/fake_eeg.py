@@ -3,6 +3,7 @@
 
     python cortext-lab/eeg/fake_eeg.py                 # 8 channels like the Unicorn, 250 Hz, LSL name CorTextEEG-FAKE
     python cortext-lab/eeg/fake_eeg.py --p300-uv 0     # no P300 at all (predictions should sit at chance)
+    python cortext-lab/eeg/fake_eeg.py --muse          # 4 channels like a Muse (TP9 AF7 AF8 TP10), 256 Hz, + Right AUX
 
 It listens to the app's CorTextMarkers LSL stream and adds a P300-shaped bump ~350 ms after every flash of the TRUE
 answer (it reads is_target from the marker, which a real brain obviously doesn't). So any accuracy you see with this
@@ -22,6 +23,12 @@ LABELS = ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "POz", "PO8"]
 P300_WEIGHT = np.array([0.3, 0.5, 0.8, 0.5, 1.0, 0.6, 0.9, 0.6])   # parietal-central maximum
 VEP_WEIGHT = np.array([0.1, 0.2, 0.2, 0.2, 0.5, 0.9, 1.0, 0.9])    # occipital visual response to every flash
 ALPHA_WEIGHT = np.array([0.2, 0.3, 0.3, 0.3, 0.7, 1.0, 1.0, 1.0])
+BLINK_WEIGHT = np.array([1.0, 0, 0, 0, 0, 0, 0, 0])   # 8 ch: blinks on Fz only (unchanged)
+# Muse (referenced to Fpz): the P300 shows at the temporo-parietal TP9/TP10, blinks dominate AF7/AF8.
+# The 5th channel "Right AUX" is an unconnected input (muselsl streams it); the bridge drops channels named AUX.
+MUSE = {"labels": ["TP9", "AF7", "AF8", "TP10", "Right AUX"],
+        "p300": np.array([1.0, 0.3, 0.3, 1.0, 0.0]), "vep": np.array([0.4, 0.1, 0.1, 0.4, 0.0]),
+        "alpha": np.array([1.0, 0.3, 0.3, 1.0, 0.0]), "blink": np.array([0.1, 1.0, 1.0, 0.1, 0.0])}
 
 
 def main():
@@ -32,7 +39,20 @@ def main():
     ap.add_argument("--noise-uv", type=float, default=8.0, help="background noise std in microvolts")
     ap.add_argument("--marker-stream", default="CorTextMarkers")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--muse", action="store_true", help="simulate a Muse: TP9 AF7 AF8 TP10 + Right AUX, 256 Hz")
+    ap.add_argument("--no-aux", action="store_true", help="with --muse: leave out the Right AUX channel")
+    ap.add_argument("--wall-clock", action="store_true",
+                    help="stamp samples with time.time() like muselsl without --lsltime (the bridge must correct it)")
     args = ap.parse_args()
+    global LABELS, P300_WEIGHT, VEP_WEIGHT, ALPHA_WEIGHT, BLINK_WEIGHT
+    if args.muse:
+        k = 4 if args.no_aux else 5
+        LABELS = MUSE["labels"][:k]
+        P300_WEIGHT, VEP_WEIGHT, ALPHA_WEIGHT, BLINK_WEIGHT = (MUSE[x][:k] for x in ("p300", "vep", "alpha", "blink"))
+        if args.name == "CorTextEEG-FAKE":
+            args.name = "Muse-FAKE"
+        if args.srate == 250.0:
+            args.srate = 256.0
     rng = np.random.default_rng(args.seed)
 
     info = pylsl.StreamInfo(args.name, "EEG", len(LABELS), args.srate, "float32", f"fake-{random.randint(0, 1 << 30)}")
@@ -108,9 +128,12 @@ def main():
                         if is_t and args.p300_uv:
                             v += args.p300_uv * P300_WEIGHT * math.exp(-((dt - 0.35) / 0.08) ** 2)
                 if rng.random() < 0.0005:                      # an occasional blink on frontal channels
-                    v[0] += 150
+                    v += 150 * BLINK_WEIGHT
+                if args.muse and len(LABELS) > 4:
+                    v[4] = dc[4] + rng.normal(0, 60)           # floating AUX input: big noise
                 x[i] = v
-            outlet.push_chunk(x.astype(np.float32).tolist(), ts.tolist())
+            stamps = ts + (time.time() - pylsl.local_clock()) if args.wall_clock else ts
+            outlet.push_chunk(x.astype(np.float32).tolist(), stamps.tolist())
             n = target_n
     except KeyboardInterrupt:
         pass
