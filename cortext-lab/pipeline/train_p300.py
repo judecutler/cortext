@@ -86,11 +86,12 @@ def main():
     ap.add_argument("--root", default=None, help="dataset folder (default data/cortext-p300)")
     ap.add_argument("--sessions", nargs="*", default=None)
     ap.add_argument("--include-simulated", action="store_true")
+    ap.add_argument("--include-superseded", action="store_true", help="also use sessions that were redone in the app")
     ap.add_argument("-o", "--out", default="p300_model.npz")
     a = ap.parse_args()
     root = a.root or dataset_root()
 
-    rows = list_sessions(root, a.include_simulated)
+    rows = list_sessions(root, a.include_simulated, include_superseded=a.include_superseded or bool(a.sessions))
     if a.sessions:
         rows = [r for r in rows if r["session_id"] in a.sessions]
     if not rows:

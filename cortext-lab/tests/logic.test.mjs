@@ -329,3 +329,75 @@ test('plans: generate, rephrase, validate, convert to specs', () => {
   assert.throws(() => specsFromPlan(pcfg, [{ prompt: 'x', target: 'nope', options: ['nope', 'cup'] }]), /not in the chosen stimulus set/);
   assert.throws(() => specsFromPlan(pcfg, [{ prompt: 'x', target: 'dog', options: ['dog', 'dog'] }]), /twice/);
 });
+
+// ---------- Images & categories (library.js) ----------
+import { groups, categoryOrder, addCategory, renameCategory, deleteCategory, moveCategory, moveItem, removeItem, updateItem, addItems, planUses } from '../web/js/library.js';
+import { snapshot } from '../web/js/undo.js';
+
+const lib = () => ({ items: cfg.items.map((i) => ({ ...i })) });
+const names = (c, cat) => groups(c).find((g) => g.name === cat).items.map((i) => i.id);
+
+test('library: categories in first-appearance order; empty ones kept once listed', () => {
+  const c = lib();
+  assert.deepEqual(categoryOrder(c), ['animal', 'object', 'shape']);
+  const { cfg: c2, name } = addCategory(c, 'tools');
+  assert.equal(name, 'tools');
+  assert.deepEqual(categoryOrder(c2), ['animal', 'object', 'shape', 'tools']);
+  assert.equal(addCategory(c2, 'Tools').name, 'Tools 2', 'names are unique ignoring case');
+  assert.equal(c.categories, undefined, 'the input is never changed');
+});
+
+test('library: move an item to another category and position, and reorder inside one', () => {
+  let c = moveItem(lib(), 'dog', 'shape', 1);
+  assert.deepEqual(names(c, 'shape'), ['circle', 'dog', 'square', 'triangle']);
+  assert.ok(!names(c, 'animal').includes('dog'));
+  c = moveItem(c, 'triangle', 'shape', 0);
+  assert.deepEqual(names(c, 'shape'), ['triangle', 'circle', 'dog', 'square']);
+  c = moveItem(c, 'triangle', 'shape', null);
+  assert.deepEqual(names(c, 'shape'), ['circle', 'dog', 'square', 'triangle']);
+  assert.equal(c.items.length, 12, 'nothing lost or duplicated');
+  // emptying a category keeps it
+  let e = lib();
+  for (const id of ['cup', 'umbrella', 'house']) e = moveItem(e, id, 'shape');
+  assert.deepEqual(categoryOrder(e), ['animal', 'object', 'shape']);
+  assert.deepEqual(names(e, 'object'), []);
+});
+
+test('library: rename, reorder and delete categories', () => {
+  let c = renameCategory({ ...lib(), prompts: { animal: 'Which {label}?' } }, 'animal', 'Animals');
+  assert.ok(c.items.filter((i) => i.category === 'Animals').length === 6);
+  assert.equal(c.prompts.Animals, 'Which {label}?');
+  assert.throws(() => renameCategory(c, 'Animals', 'shape'), /already a category/);
+  assert.throws(() => renameCategory(c, 'Animals', '  '), /needs a name/);
+  c = moveCategory(c, 'shape', -1);
+  assert.deepEqual(categoryOrder(c), ['Animals', 'shape', 'object']);
+  assert.equal(moveCategory(c, 'Animals', -1), c, 'moving past the edge does nothing');
+  const moved = deleteCategory(c, 'shape', { moveTo: 'object' });
+  assert.deepEqual(categoryOrder(moved), ['Animals', 'object']);
+  assert.equal(moved.items.length, 12);
+  const dropped = deleteCategory(c, 'shape');
+  assert.equal(dropped.items.length, 9);
+  assert.throws(() => deleteCategory(c, 'shape', { moveTo: 'nope' }), /No category/);
+});
+
+test('library: edit, remove and add items; ids never change', () => {
+  let c = updateItem(lib(), 'cat', { label: ' kitty ', text: 'Kitty', category: 'object' });
+  const cat = c.items.find((i) => i.id === 'cat');
+  assert.deepEqual([cat.label, cat.text, cat.category], ['kitty', 'Kitty', 'object']);
+  c = removeItem(c, 'cat');
+  assert.ok(!c.items.some((i) => i.id === 'cat'));
+  const r = addItems(c, [{ name: 'dog.png', image: 'dog.png' }, { name: 'red-car.jpg', image: 'red-car.jpg' }], 'vehicles');
+  assert.deepEqual(r.added.map((i) => i.id), ['dog_2', 'red_car'], 'a clashing id gets a suffix');
+  assert.equal(r.added[1].text, 'Red car');
+  assert.deepEqual(categoryOrder(r.cfg).at(-1), 'vehicles');
+  assert.deepEqual(planUses([{ target: 'dog', options: ['dog', 'cup'] }, { target: 'cup', options: ['cup', 'fish'] }], 'cup'), [1, 2]);
+});
+
+test('undo snapshot: deep copy of plain data, blobs kept by reference', () => {
+  const blob = new Blob(['x']);
+  const a = { plan: [{ options: ['a', 'b'] }], files: { f: blob } };
+  const b = snapshot(a);
+  b.plan[0].options.push('c');
+  assert.deepEqual(a.plan[0].options, ['a', 'b']);
+  assert.equal(b.files.f, blob);
+});

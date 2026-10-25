@@ -5,6 +5,9 @@ import { SessionRunner } from '../session.js';
 import { flashCounts, summarizeTrials, applyValidity } from '../trial.js';
 import { INVALID_REASONS } from '../schema.js';
 import { HeadMap, EEGFeed, mapValues } from '../brainviz.js';
+import { launchFrom } from '../launch.js';
+import { record } from '../undo.js';
+import { confirmDialog, toast } from '../ui.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const noFocus = { tabindex: '-1', onmousedown: (e) => e.preventDefault() };
@@ -38,10 +41,11 @@ export function renderRun(root, app) {
     h('button', { class: 'btn small', ...noFocus, onclick: () => app.toggleMode() }, 'Demo view ', h('kbd', {}, 'M')),
     h('button', { class: 'btn small', ...noFocus, onclick: () => setPanel(false) }, 'Hide panel ', h('kbd', {}, 'I')),
     h('button', { class: 'btn small', ...noFocus, onclick: () => runner.stop() }, 'End session'),
+    h('button', { class: 'btn small', ...noFocus, title: 'Start this session again from question 1 (this attempt is kept)', onclick: () => redoSession(true) }, '↺ Restart session'),
     h('a', { class: 'btn small', href: `#/review/${session.session_id}`, target: '_blank', rel: 'noopener' }, 'Review table ↗'));
   const dev = h('aside', { class: 'dev' },
     h('div', { class: 'card' }, h('h3', {}, 'Controls'), ctrl,
-      h('div', { class: 'kbdhelp', style: { marginTop: '6px' } }, 'Space/Enter next · Backspace discard · R redo · 1–4 / A–D choose · P pause · M mode · I panel · Shift+F fullscreen · Shift+B bars')),
+      h('div', { class: 'kbdhelp', style: { marginTop: '6px' } }, 'Space/Enter next · Backspace discard · R redo question · Ctrl/⌘Z undo · 1–4 / A–D choose · P pause · M mode · I panel · Shift+F fullscreen · Shift+B bars · N next session (at the end)')),
     mkSec('conn', 'Connections'), mkSec('eeg', 'EEG headset'), mkSec('sess', 'Session'), mkSec('count', 'Valid trials & repeats per class'),
     mkSec('timing', 'Timing'), mkSec('list', 'Trials'), mkSec('log', 'Marker log'));
   // The info panel can be hidden (keeps the top navigation, unlike Demo view). Remembered per browser.
@@ -162,7 +166,7 @@ export function renderRun(root, app) {
         h('div', { class: 'pred', id: 'predLine' }, predText(trial)),
         chips,
         h('div', { class: 'btns' },
-          h('button', { class: 'btn danger big-discard', ...noFocus, onclick: () => r.discard() }, 'Discard trial', h('kbd', {}, '⌫')),
+          h('button', { class: 'btn danger big-discard', ...noFocus, onclick: () => discard() }, 'Discard trial', h('kbd', {}, '⌫')),
           h('button', { class: 'btn', ...noFocus, onclick: () => r.redo() }, 'Redo this question', h('kbd', {}, 'R')),
           h('button', { class: 'btn primary', ...noFocus, onclick: () => r.next() }, 'Next', h('kbd', {}, 'Space')))].filter(Boolean));
       postEl.classList.add('show');
@@ -212,10 +216,83 @@ export function renderRun(root, app) {
     } else if (ph === 'paused') {
       show('Paused', h('button', { class: 'btn primary', ...noFocus, onclick: () => runner.togglePause() }, 'Resume ', h('kbd', {}, 'P')));
     } else if (ph === 'finished') {
+      if (overlayEl.dataset.ended === session.session_id) return;   // drawn once; keeps the participant field's text
+      overlayEl.dataset.ended = session.session_id;
+      const sum = summarizeTrials(runner.trials);
+      const sec = session.started_iso && session.ended_iso ? (new Date(session.ended_iso) - new Date(session.started_iso)) / 1000 : null;
+      const dur = sec == null ? '' : sec < 90 ? ` · ${Math.round(sec)} s` : ` · ${(sec / 60).toFixed(1)} min`;
+      const pid = h('input', { type: 'text', value: session.participant_id, class: 'next-pid', 'aria-label': 'Participant for the next session', size: 8,
+        onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); nextSession(pid.value); } } });
+      endPid = pid;
       show(session.status === 'finished' ? 'Session complete' : 'Session ended',
-        h('div', {}, h('a', { class: 'btn primary', href: `#/summary/${session.session_id}` }, 'Session summary'), ' ',
-          h('a', { class: 'btn', href: `#/review/${session.session_id}` }, 'Review / clean trials')));
+        h('div', { class: 'muted' }, `${sum.valid} valid of ${sum.attempts} attempt${sum.attempts === 1 ? '' : 's'}${dur}` +
+          (session.status === 'finished' ? '' : ` · stopped before the end (${runner.queue.length} question${runner.queue.length === 1 ? '' : 's'} not asked)`)),
+        h('div', { class: 'endnext' },
+          h('label', {}, 'Participant ', pid),
+          h('button', { class: 'btn primary', ...noFocus, onclick: () => nextSession(pid.value) }, 'Next session ▸', h('kbd', {}, 'N'))),
+        h('div', { class: 'muted small' }, 'Same settings and question list, new random order. Change the participant ID for a new person.'),
+        h('div', { class: 'endacts' },
+          h('button', { class: 'btn', ...noFocus, onclick: () => redoSession(false), title: 'Run exactly the same questions again; this recording is kept and marked superseded' }, '↺ Redo this session'),
+          h('a', { class: 'btn', href: `#/summary/${session.session_id}` }, 'Session summary'),
+          h('a', { class: 'btn', href: `#/review/${session.session_id}` }, 'Review / clean trials'),
+          h('a', { class: 'btn', href: '#/experiment' }, 'Change settings')));
     } else overlayEl.classList.remove('show');
+  }
+
+  // ---------- after the session: next / redo ----------
+  let endPid = null, launching = false;
+  async function nextSession(participant) {
+    if (launching) return;
+    const p = String(participant || '').trim();
+    if (!p) { toast('Enter a participant ID for the next session.', 'warn'); endPid?.focus(); return; }
+    launching = true;
+    try { await launchFrom(app, session.session_id, { mode: 'next', participant: p }); }
+    catch (e) { toast(e.message, 'bad'); launching = false; }
+  }
+  /** Redo the whole session: same questions, same order. midway: restarting a session that is still running. */
+  async function redoSession(midway) {
+    if (launching) return;
+    midway = midway && runner.phase !== 'finished';
+    const n = session.planned_trials;
+    const ok = await confirmDialog({
+      title: midway ? 'Restart this session from question 1?' : 'Redo this session?',
+      body: h('div', {},
+        h('p', {}, `The same ${n} question${n === 1 ? '' : 's'} run again in the same order for participant ${session.participant_id}.`),
+        h('p', { class: 'muted small' }, (midway ? 'The current recording ends now. ' : '') +
+          'Nothing is deleted: this recording is kept and marked “superseded”, so training leaves it out. You can unmark it on its summary page, or delete it under Recorded sessions.')),
+      confirmLabel: midway ? 'Restart session' : 'Redo session',
+    });
+    if (!ok) return;
+    launching = true;
+    try {
+      if (runner.phase !== 'finished') { runner.stop(); await runner.finished; }
+      await launchFrom(app, session.session_id, { mode: 'redo' });
+    } catch (e) { toast(e.message, 'bad'); launching = false; }
+  }
+
+  // ---------- undoable trial edits ----------
+  /** Undo for a validity change: put back exactly what it was (the log keeps both changes). */
+  function recordValidity(t, before, label) {
+    const set = (st) => () => {
+      applyValidity(t, { valid: st.valid, reason: st.reason, note: st.note, by: 'operator(undo)' });
+      app.markers.emit('trial_invalid', { trial_id: t.trial_id, trial_index: t.trial_index, extra: { reason: st.valid ? 'restored' : st.reason } });
+      runner.saveTrial(t);
+      if (runner.current === t && runner.phase === 'post') ui.showPost(t, runner);
+      renderDev(true);
+    };
+    const after = { valid: t.valid, reason: t.invalid_reason, note: t.invalid_note };
+    // no toast while stimuli are on screen: anything that appears then would evoke its own brain response
+    record(label, set(before), set(after), { toast: !['prompt', 'imagery', 'flash'].includes(runner.phase) });
+  }
+  const validityOf = (t) => ({ valid: t.valid, reason: t.invalid_reason, note: t.invalid_note });
+  /** Discard: during a trial it aborts it (cannot be undone: the stimuli were cut short); after the click it only flags it. */
+  function discard() {
+    const t = runner.current;
+    if (runner.phase === 'post' && t && t.valid) {
+      const before = validityOf(t);
+      runner.discard();
+      recordValidity(t, before, `Discarded question ${t.trial_index + 1}`);
+    } else runner.discard();
   }
 
   // ---------- dev panel (throttled; log frozen while flashing so DOM work cannot disturb frame timing) ----------
@@ -287,12 +364,14 @@ export function renderRun(root, app) {
     devSections.list.replaceChildren(h('div', { class: 'triallist' }, h('table', {}, h('tr', {}, h('th', {}, 'id'), h('th', {}, 'q'), h('th', {}, 'status'), h('th', {}, 'validity')), ...rows)));
   }
   function setValidity(t, v) {
+    const before = validityOf(t);
     if (v === 'valid') applyValidity(t, { valid: true, by: 'operator' });
     else applyValidity(t, { valid: false, reason: v, by: 'operator' });
     app.markers.emit('trial_invalid', { trial_id: t.trial_id, trial_index: t.trial_index, extra: { reason: v === 'valid' ? 'restored' : v } });
     runner.saveTrial(t);
     if (runner.current === t) ui.showPost(t, runner);
     renderDev(true);
+    recordValidity(t, before, v === 'valid' ? `Marked trial #${t.trial_id} valid` : `Marked trial #${t.trial_id} invalid (${v})`);
   }
 
   // ---------- EEG mini view (researcher panel only; paused while stimuli are on screen) ----------
@@ -324,7 +403,8 @@ export function renderRun(root, app) {
     const k = e.key;
     const trial = runner.current;
     if (k === ' ' || k === 'Enter') { e.preventDefault(); runner.next(); }
-    else if (k === 'Backspace') { e.preventDefault(); runner.discard(); }
+    else if (k === 'Backspace') { e.preventDefault(); discard(); }
+    else if ((k === 'n' || k === 'N') && runner.phase === 'finished') { e.preventDefault(); nextSession(endPid?.value ?? session.participant_id); }
     else if (k === 'r' || k === 'R') runner.redo();
     else if (k === 'p' || k === 'P') runner.togglePause();
     else if (k === 'm' || k === 'M') app.toggleMode();
