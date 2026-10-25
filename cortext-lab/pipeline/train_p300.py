@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Train the live P300 scorer on the shared dataset and report honest cross-validated accuracy.
 
-    python cortext-lab/pipeline/train_p300.py                       # all real sessions -> p300_model.npz
+    python cortext-lab/pipeline/train_p300.py                       # all real sessions -> cortext-lab/models/library/
     python cortext-lab/pipeline/train_p300.py --sessions S1 S2      # chosen sessions
-    python cortext-lab/bridge/bridge.py --p300-model p300_model.npz # use it live
+    python cortext-lab/pipeline/train_p300.py --activate            # ... and make it the model the bridge runs
+
+Models are saved to the team library (cortext-lab/models/library/, shared through git) named <participants>_<date>.npz.
+The bridge runs the one in cortext-lab/models/active/; pick it on the Setup page or use --activate (see models/README.md).
 
 It rebuilds features exactly the way the bridge computes them live (causal 0.5-20 Hz filter on the RAW recording,
 40 ms bins), so the saved model can be dropped into the bridge. Evaluation:
@@ -16,6 +19,7 @@ Uses the cleaned dataset only for validity/artifact flags. Needs the raw recordi
 import argparse
 import os
 import sys
+import time
 
 import numpy as np
 
@@ -23,6 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "bridge"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "datasets", "cortext-p300"))
 import p300 as P  # noqa: E402
+import models  # noqa: E402
 from build_session import dataset_root  # noqa: E402
 from cortext_data import list_sessions  # noqa: E402
 
@@ -87,7 +92,10 @@ def main():
     ap.add_argument("--sessions", nargs="*", default=None)
     ap.add_argument("--include-simulated", action="store_true")
     ap.add_argument("--include-superseded", action="store_true", help="also use sessions that were redone in the app")
-    ap.add_argument("-o", "--out", default="p300_model.npz")
+    ap.add_argument("-o", "--out", default=None,
+                    help="where to save (default: cortext-lab/models/library/<participants>_<date>.npz, the team library)")
+    ap.add_argument("--activate", action="store_true",
+                    help="also make it the model the bridge runs (copies it into cortext-lab/models/active/)")
     a = ap.parse_args()
     root = a.root or dataset_root()
 
@@ -145,8 +153,14 @@ def main():
             a1, n1, _ = answer_accuracy(m.score(X[te]), y[te], groups[te], options[te])
             print(f"leave-one-session-out, test {sid}: answer accuracy {a1:.2f} over {n1} trials")
 
-    model = P.LinearP300.fit(X, y, labels, meta={"trained_on": [r["session_id"] for r in rows], "n_epochs": int(len(y)),
-                                                 "cv_auc": round(auc(s, y), 3), "cv_answer_accuracy": round(acc, 3)})
+    used = [r for r in rows if r["session_id"] in set(np.unique(sids))]
+    participants = sorted({str(r.get("participant_id")) for r in used if r.get("participant_id")})
+    model = P.LinearP300.fit(X, y, labels, meta={
+        "trained_on": [r["session_id"] for r in used], "participants": participants,
+        "simulated": any(r.get("simulated") for r in used), "trained_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "n_epochs": int(len(y)), "n_trials": int(n_trials), "chance": round(1 / n_opt, 3),
+        "cv_auc": round(auc(s, y), 3), "cv_answer_accuracy": round(acc, 3),
+        "shuffled_accuracy": round(float(np.mean(accs0)), 3)})
     ev = []
     for g in np.unique(groups):
         m = groups == g
@@ -155,8 +169,19 @@ def main():
         if len(truth):
             ev.append((sums, truth[0]))
     model.temperature = P.fit_temperature(ev)
-    model.save(a.out)
-    print(f"\nsaved {a.out}  ->  python cortext-lab/bridge/bridge.py --p300-model {a.out}")
+    out = a.out
+    if out is None:
+        who = "-".join(participants) or "unknown"
+        out = os.path.join(models.library_dir(), models.safe_name(
+            f"{who}_{time.strftime('%Y%m%d-%H%M')}{'_SIM' if model.meta['simulated'] else ''}.npz"))
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    model.save(out)
+    print(f"\nsaved {out}")
+    if a.activate:
+        dst = models.activate_file(out)
+        print(f"active: {dst}  (the bridge runs it at its next start, or pick it on the Setup page now)")
+    else:
+        print("to run it: pick it on the Setup page (P300 model), or add --activate, or copy it into cortext-lab/models/active/")
 
 
 if __name__ == "__main__":

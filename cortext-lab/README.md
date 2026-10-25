@@ -43,7 +43,10 @@ See [`../docs/DATA_COLLECTION.md`](../docs/DATA_COLLECTION.md) and [`../docs/DAT
   - The scorer starts with an untrained heuristic (mean 250–450 ms amplitude over parietal channels).
   - After 5 valid trials and 30 target epochs it retrains a shrinkage-LDA on this session after each trial.
   - It never uses a trial's own labels before that trial has been predicted.
-  - `--p300-model file.npz` loads a model trained with `pipeline/train_p300.py` instead.
+  - A trained model replaces both: the bridge runs the file in `models/active/` at startup. **Setup → P300 model** lists
+    the team library (`models/library/`, shared through git; `pipeline/train_p300.py` saves there) and the models
+    calibrated live on this laptop, and switches the running model without a restart. `--p300-model FILE` overrides
+    `models/active/`; `--p300-model none` ignores it. See [`models/README.md`](models/README.md).
 - At session end, `pipeline/build_session.py` cleans the EEG and writes `data/cortext-p300/sessions/<id>/`
   (git-ignored). Upload sends only that folder to the private Hugging Face dataset (button, or automatic from the Setup tab).
 - The **EEG** tab (`#/eeg`) is the neural monitor: scalp map, region band power, live traces, P300 waveform and answer evidence. It is

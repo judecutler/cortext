@@ -311,7 +311,8 @@ class EEGEngine:
 class P300Scorer:
     """Turns flash markers + EEG into per-option P300 evidence. Three ways to score, chosen per prediction:
 
-    * model     - a LinearP300 loaded from --p300-model (trained offline with eeg/train_p300.py)
+    * model     - a trained LinearP300: --p300-model, else the file in models/active/, or one picked on the Setup
+                  page while running (set_model). Trained offline with pipeline/train_p300.py or calibrated live.
     * adaptive  - a LinearP300 retrained in the bridge after every finished valid trial of the current session
     * heuristic - untrained: mean 250-500 ms amplitude over parietal channels (works only for a strong P300)
     mode 'auto' = model if given, else adaptive once it has enough data, else heuristic.
@@ -328,17 +329,54 @@ class P300Scorer:
         self.pool = []              # finished valid trials: {"key","X","y","options","true"}
         self.adaptive = None
         self.adaptive_session = None
+        self.adaptive_participant = None
         self.model = None
         self.model_path = model_path
         self.model_error = None
+        self.model_source = "command line (--p300-model)" if model_path else "none"
+        self.model_info = None
         self.live_cbs = set()
         self._live_keys = {}
         if model_path:
             try:
-                self.model = P.LinearP300.load(model_path)
-            except Exception as exc:
-                self.model_error = f"could not load {model_path}: {exc}"
-                print("  P300 model:", self.model_error)
+                self.set_model(model_path, self.model_source, quiet=True)
+            except ValueError:
+                pass          # kept in model_error and shown on the Setup page
+
+    def set_model(self, path, source="Setup page", quiet=False):
+        """Load a trained model and score with it from the next prediction on. path None = no trained model
+        (adapt to the session, else heuristic). On a load error the previous model stays and the error is raised."""
+        if path is None:
+            with self.lock:
+                self.model, self.model_path, self.model_error, self.model_info = None, None, None, None
+                self.model_source = source
+            return
+        try:
+            m = P.LinearP300.load(path)
+        except Exception as exc:
+            msg = f"could not load {path}: {exc}"
+            with self.lock:
+                if self.model is None:
+                    self.model_path, self.model_error, self.model_source = path, msg, source
+            if not quiet:
+                print("  P300 model:", msg)
+            raise ValueError(msg)
+        err = None
+        labels = list(self.engine.labels or [])
+        if labels:
+            try:
+                m.reorder_for(labels)
+            except ValueError as exc:
+                err = str(exc)
+        meta = m.meta or {}
+        with self.lock:
+            self.model, self.model_path, self.model_error, self.model_source = m, path, err, source
+            self.model_info = {"file": os.path.basename(path), "participants": meta.get("participants") or (
+                [meta["participant_id"]] if meta.get("participant_id") else []), "n_epochs": meta.get("n_epochs"),
+                "cv_answer_accuracy": meta.get("cv_answer_accuracy"), "simulated": meta.get("simulated"),
+                "channels": list(m.labels)}
+        if not quiet:
+            print(f"  P300 model: {os.path.basename(path)} ({source})" + (f"  WARNING: {err}" if err else ""))
 
     def on_stream(self, labels):
         if self.model is not None:
@@ -355,6 +393,7 @@ class P300Scorer:
         with self.lock:
             if ev == "session_start" and msg.get("session_id") != self.adaptive_session:
                 self.pool, self.adaptive, self.adaptive_session = [], None, msg.get("session_id")
+                self.adaptive_participant = (msg.get("extra") or {}).get("participant_id")
             if ev == "trial_start":
                 self.trials[key] = {"flashes": [], "done": False, "invalid": False, "options": None}
                 if len(self.trials) > 300:
@@ -415,6 +454,9 @@ class P300Scorer:
         y = np.concatenate([p["y"] for p in pool])
         labels = list(self.engine.labels)
         m = P.LinearP300.fit(X, y, labels, meta={"trained_on": "live session", "session_id": self.adaptive_session,
+                                                  "participant_id": self.adaptive_participant,
+                                                  "simulated": bool(self.engine.info.get("simulated")),
+                                                  "trained_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                                                   "n_trials": len(pool), "n_epochs": int(len(y))})
         ev = []
         for p in pool:
@@ -458,7 +500,12 @@ class P300Scorer:
     def _pick(self):
         labels = list(self.engine.labels)
         if self.mode in ("auto", "model") and self.model is not None and not self.model_error:
-            return "model", self.model, self.model.reorder_for(labels)
+            if not labels:          # no EEG stream yet: nothing to score, but status must not crash
+                return "model", self.model, None
+            try:
+                return "model", self.model, self.model.reorder_for(labels)
+            except ValueError as exc:
+                self.model_error = str(exc)
         if self.mode in ("auto", "adaptive") and self.adaptive is not None:
             return "adaptive", self.adaptive, list(range(len(labels)))
         return "heuristic", None, None
@@ -467,6 +514,7 @@ class P300Scorer:
         with self.lock:
             kind, _, _ = self._pick()
             return {"mode": self.mode, "active": kind, "model_file": self.model_path, "model_error": self.model_error,
+                    "model_source": self.model_source, "model_info": self.model_info,
                     "adaptive_trials": len(self.pool),
                     "adaptive_ready": self.adaptive is not None,
                     "adaptive_needs": f"{self.MIN_TRIALS} valid trials and {self.MIN_TARGET_EPOCHS} target epochs"}

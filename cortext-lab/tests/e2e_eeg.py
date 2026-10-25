@@ -3,6 +3,7 @@
 monitor, dataset build). Run: python tests/e2e_eeg.py   (needs pylsl, numpy, scipy, playwright)
 The dataset is written to a temp folder (CORTEXT_DATASET_DIR), not into the repo."""
 import json
+import shutil
 import os
 import subprocess
 import sys
@@ -131,6 +132,21 @@ def main():
             X, y, info = load_epochs(root=ds, include_simulated=True)
             assert len(X) > 100 and len(set(info["groups"])) == 7
             print(f"dataset: {folder} with {files}; loader excludes simulated by default, {len(X)} epochs with include_simulated: OK")
+
+            # ---- train_p300.py on that session: saves into the team library, named by participant, --activate ----
+            mdir = tempfile.mkdtemp(prefix="cortext-models-")
+            tr = subprocess.run([sys.executable, os.path.join(ROOT, "pipeline", "train_p300.py"), "--root", ds, "--include-simulated", "--activate"],
+                                env={**os.environ, "CORTEXT_MODELS_DIR": mdir}, capture_output=True, text=True, timeout=300)
+            assert tr.returncode == 0, tr.stdout + tr.stderr
+            saved = os.listdir(os.path.join(mdir, "library"))
+            assert len(saved) == 1 and saved[0].startswith("SIMTEST_") and saved[0].endswith("_SIM.npz"), saved
+            assert os.listdir(os.path.join(mdir, "active")) == saved, os.listdir(os.path.join(mdir, "active"))
+            sys.path.insert(0, os.path.join(ROOT, "bridge"))
+            import p300 as P300
+            mm = P300.LinearP300.load(os.path.join(mdir, "library", saved[0])).meta
+            assert mm["participants"] == ["SIMTEST"] and mm["simulated"] is True and mm["n_trials"] == 7 and "shuffled_accuracy" in mm, mm
+            shutil.rmtree(mdir, ignore_errors=True)
+            print(f"train_p300.py -> models/library/{saved[0]} (participant, SIM tag, CV + shuffled accuracy in meta), --activate: OK")
             browser.close()
         bad = [e for e in errors if "favicon" not in e]
         assert not bad, bad
