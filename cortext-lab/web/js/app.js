@@ -9,13 +9,17 @@ import { renderReview } from './views/review.js';
 import { renderSummary } from './views/summary.js';
 import { renderSessions } from './views/sessions.js';
 import { renderEeg } from './views/eeg.js';
-import { h } from './util.js';
+import { renderLibrary } from './views/library.js';
+import { h, isTyping } from './util.js';
+import { undo, redo, clearUndo, onUndoChange, canUndo, nextUndoLabel, UNDO_KEY } from './undo.js';
 
 const bridge = new BridgeClient();
 const markers = new MarkerBus(bridge);
 export const app = {
   bridge, markers, runner: null, pending: null,
   mode: localStorage.getItem('cortext-lab.mode') || 'researcher',
+  /** Re-render the current page (used when a new session starts while #/run is already showing). */
+  rerender: () => route(true),
   toggleMode() { app.setMode(app.mode === 'demo' ? 'researcher' : 'demo'); },
   setMode(m) {
     app.mode = m;
@@ -40,8 +44,9 @@ function topStatus() {
   el.innerHTML = `<span class="dot ${s.connected ? 'green' : 'red'}"></span>bridge ${s.connected ? 'online' : 'offline'}` + eegTxt;
 }
 
-async function route() {
+async function route(force = false) {
   const hash = location.hash || '#/setup';
+  if (!force && hash === currentHash && view.childElementCount) return;
   // Leaving a running session: confirm first.
   if (app.runner && app.runner.phase !== 'finished' && !hash.startsWith('#/run') && currentHash && currentHash.startsWith('#/run')) {
     if (!confirm('A session is running. Leave and end it? (Data recorded so far is kept.)')) {
@@ -50,18 +55,22 @@ async function route() {
     }
   }
   if (cleanup) { try { cleanup(); } catch (e) { console.error(e); } cleanup = null; }
+  clearUndo();   // undo entries refer to the page that made them
+  // nothing may pop up over the participant's screen: drop leftover notices when a session view opens
+  if (hash.startsWith('#/run')) document.querySelectorAll('#toasts .toast:not(.bad)').forEach((t) => t.remove());
   currentHash = hash;
   view.replaceChildren();
   const [, name, arg] = hash.split('/');
   document.body.dataset.route = name || 'setup';
   // sessions, run, review and summary are all part of the Experiment tab
-  const section = { brain: 'eeg', sessions: 'experiment', run: 'experiment', review: 'experiment', summary: 'experiment' }[name] || name || 'setup';
+  const section = { brain: 'eeg', sessions: 'experiment', library: 'experiment', run: 'experiment', review: 'experiment', summary: 'experiment' }[name] || name || 'setup';
   document.querySelectorAll('#topbar nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === section));
   try {
     if (name === 'run') cleanup = renderRun(view, app);
     else if (name === 'review') await renderReview(view, app, decodeURIComponent(arg));
     else if (name === 'summary') await renderSummary(view, app, decodeURIComponent(arg));
     else if (name === 'sessions') await renderSessions(view, app);
+    else if (name === 'library') cleanup = await renderLibrary(view, app);
     else if (name === 'eeg' || name === 'brain') cleanup = renderEeg(view, app);
     else if (name === 'timing') cleanup = renderTiming(view, app);
     else if (name === 'experiment') cleanup = await renderExperiment(view, app);
@@ -73,13 +82,28 @@ async function route() {
 }
 
 document.getElementById('modeToggle').addEventListener('click', () => app.toggleMode());
+const undoBtn = document.getElementById('undoBtn');
+undoBtn.addEventListener('click', () => undo());
+onUndoChange(() => {
+  undoBtn.disabled = !canUndo();
+  undoBtn.title = canUndo() ? `Undo: ${nextUndoLabel()} (${UNDO_KEY})` : 'Nothing to undo';
+});
+document.addEventListener('keydown', (e) => {
+  // Undo / redo everywhere. Inside a text field the browser's own text undo wins.
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && !e.altKey && !isTyping(e)) {
+    const k = e.key.toLowerCase();
+    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+    if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); return; }
+  }
+});
 document.addEventListener('keydown', (e) => {
   // Mode toggle outside the run view (the run view handles it itself).
   if (!location.hash.startsWith('#/run') && (e.key === 'm' || e.key === 'M') && !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) app.toggleMode();
 });
-window.addEventListener('hashchange', route);
+window.addEventListener('hashchange', () => route());
 app.setMode(app.mode);
 bridge.onChange(topStatus);
 topStatus();
 bridge.start();
-route();
+route(true);

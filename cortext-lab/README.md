@@ -30,8 +30,9 @@ Typical recording setup: start the bridge, open the page, start your EEG stream,
 select `CorTextMarkers` **and** the EEG stream, *Start*, then run the session. The dev panel shows red/green
 indicators for: bridge connection, LSL outlet, LSL recorder attached, EEG stream present/delivering samples.
 
-Hotkeys (run view): `Space`/`Enter` next/start · `Backspace` discard · `R` redo · `1–4` or `A–D` choose answer ·
-`P` pause · `M` Researcher/Demo mode · `Shift+F` fullscreen · `Shift+B` live score bars.
+Hotkeys (run view): `Space`/`Enter` next/start · `Backspace` discard · `R` redo question · `1–4` or `A–D` choose answer ·
+`P` pause · `M` Researcher/Demo mode · `I` info panel · `Shift+F` fullscreen · `Shift+B` live score bars · `N` next session
+(on the end screen). Everywhere: `Ctrl/⌘+Z` undo, `Ctrl/⌘+Shift+Z` (or `Ctrl+Y`) redo.
 
 ## Live EEG, cleaning and the shared dataset
 
@@ -57,7 +58,48 @@ See [`../docs/DATA_COLLECTION.md`](../docs/DATA_COLLECTION.md) and [`../docs/DAT
 | **EEG** | Neural monitor: scalp map, band power, live traces, P300 waveform. Can open in its own window for a second screen. |
 | **Setup** | Headset check, participant ID, device, predictor, photodiode, and **data storage** (local folder, Hugging Face status, upload/download). |
 | **Timing** | The display/marker timing test, run inside the app (no new tab; it needs the same bridge connection). |
-| **Experiment** | Presets, stimulus set, design and timing, **question list**, then Start. Sub-page **Recorded sessions**: buckets, filters, bulk actions and real deletion. |
+| **Experiment** | Three sub-pages, in the order you use them: **Images & categories** (see and rearrange the stimulus set), **Configure & run** (presets, stimulus set, design and timing, question list, then Start), **Recorded sessions** (buckets, filters, bulk actions and real deletion). |
+
+## Undo
+
+Edits happen immediately, without “are you sure?” dialogs, and every one can be reversed: a notice says what changed
+with an **Undo** button, `Ctrl/⌘+Z` undoes and `Ctrl/⌘+Shift+Z` redoes, and the **↶ Undo** button in the top bar names
+the next thing it will undo. This covers the question list, presets (load, update, delete, reset), everything on
+Images & categories, discarding a trial after the click, validity changes in the run panel and on the review page, and
+the “superseded” mark. History is per page (it is cleared when you move to another page). What cannot be reversed keeps
+its confirmation: deleting a recorded session (from disk / Hugging Face) and starting a recording. Nothing pops up over
+the participant’s screen while stimuli are on it.
+
+## Images & categories
+
+`#/library` shows the chosen stimulus set as a board: one column per category with its images.
+- **Drag** an image to another category or up/down to reorder; **drop image files** onto a column to add them there
+  (or use *+ Add images*). Keyboard: Tab to an image, `Alt+↑/↓` reorder, `Alt+←/→` move to the neighbouring category,
+  `Enter` edit, `Delete` remove.
+- **Categories**: click the name to rename, ◀ ▶ to reorder, ✕ to delete (its images move to a category you choose,
+  or go with it), *+ Category* or the dashed column to add one. Empty categories are kept.
+- **Edit** (✎ or double-click): label (used as `{label}` in question wording), text shown on screen, category, image.
+  Item **ids never change**, so question lists and recorded sessions keep matching.
+- **Sets**: switch set, *Use this set in the experiment*, *New set…* (empty), *Duplicate…*, *Delete set*. Every change
+  is saved in this browser at once. The built-in sample set is files on disk, so your first change makes an editable copy
+  (“Sample set (my copy)”) and, if the experiment was using the built-in set, switches it to the copy.
+- Removing an image that your question list uses says which questions (Start then reports the list as invalid).
+
+## Next session, redo and restart
+
+When a session ends, the end screen shows:
+- **Next session** (`N`, or `Enter` in the participant field): same settings and question list as the session just
+  recorded, a new random seed (and a re-shuffle if “Re-shuffle every time a session starts” is on). Change the
+  participant ID there for the next person. The new session stores `previous_session_id`.
+- **Redo this session**: exactly the same questions in the same order (same seed / same list). The first recording is
+  **kept, not deleted**, and marked `superseded_by` (the redo stores `redo_of`). Its summary page shows a banner with
+  *Use it after all* to remove the mark; the Recorded sessions list shows *superseded* / *redo* pills.
+- **Session summary**, **Review / clean trials**, **Change settings**.
+
+The same Next / Redo buttons are on every session’s summary page. **↺ Restart session** in the run panel stops a session
+part-way and starts it again from question 1 (same as Redo). The mark travels into the dataset’s `meta.json`;
+`cortext_data.load_epochs` / `load_imagery` and `train_p300.py` skip superseded sessions unless you ask for them
+(`include_superseded=True`, `--include-superseded`, or by naming them in `sessions=` / `--sessions`).
 
 ## Presets, question wording and image order
 

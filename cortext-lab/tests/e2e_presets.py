@@ -47,8 +47,13 @@ def main():
             page.locator("select[aria-label=Preset]").select_option("My list")
             with page.expect_download() as dl: page.click("button:has-text('Export')")
             path = dl.value.path(); assert os.path.getsize(path) > 200
-            page.click("text=Clear list"); page.click("dialog button:has-text('Clear')")
+            # clearing is instant and undoable (no "are you sure?" dialog)
+            page.click("text=Clear list")
             assert page.locator(".planrow").count() == 0
+            page.evaluate("document.activeElement.blur()"); page.keyboard.press("Control+z")
+            page.wait_for_function("document.querySelectorAll('.planrow').length === 12")
+            page.keyboard.press("Control+Shift+z")
+            page.wait_for_function("document.querySelectorAll('.planrow').length === 0")
             page.click("button:has-text('Load')"); assert page.locator(".planrow").count() == 12
             page.locator("input[type=file][accept='.json']").set_input_files(path)
             page.wait_for_selector("select[aria-label=Preset] option:has-text('My list (2)')", state="attached")

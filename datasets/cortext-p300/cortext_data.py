@@ -38,9 +38,14 @@ PER_EPOCH = ["y", "trial_id", "trial_index", "option_id", "option_position", "ca
              "mode", "trial_valid", "rejected_artifact", "clicked_option_id", "onset_lsl", "session_id"]
 
 
-def list_sessions(root=ROOT, include_simulated=False):
-    """One dict per local session (read from the meta.json files, so it is never out of date)."""
-    return [r for r in store.scan_local(root) if include_simulated or not r["simulated"]]
+def list_sessions(root=ROOT, include_simulated=False, include_superseded=False):
+    """One dict per local session (read from the meta.json files, so it is never out of date).
+
+    Sessions marked "superseded" in the app (the operator pressed "Redo this session") are left out unless
+    include_superseded=True; asking for them by id (sessions=[...]) in load_epochs also includes them.
+    """
+    return [r for r in store.scan_local(root) if (include_simulated or not r["simulated"])
+            and (include_superseded or not r.get("superseded_by"))]
 
 
 def session_meta(session, root=ROOT):
@@ -48,7 +53,7 @@ def session_meta(session, root=ROOT):
 
 
 def _folder(session, root):
-    for r in list_sessions(root, include_simulated=True):
+    for r in list_sessions(root, include_simulated=True, include_superseded=True):
         if r["session_id"] == session or r["folder"] == session:
             return os.path.join(root, r["folder"])
     raise KeyError(f"session {session} is not in {root}. Download it with: python datasets/cortext-p300/cortext_store.py pull")
@@ -63,7 +68,7 @@ def load_epochs(sessions=None, root=ROOT, valid_only=True, drop_rejected=True, c
     mode: "flash" or "sequential" to keep one presentation mode only.
     bucket: only sessions labelled with this bucket in the app (e.g. "train" or "test"); a list of buckets also works.
     """
-    rows = list_sessions(root, include_simulated)
+    rows = list_sessions(root, include_simulated, include_superseded=sessions is not None)
     nothing_downloaded = not rows
     if bucket is not None:
         want = {bucket} if isinstance(bucket, str) else set(bucket)
@@ -124,7 +129,7 @@ def load_imagery(sessions=None, root=ROOT, valid_only=True, drop_rejected=True, 
     info["category"], info["groups"] ("session:trial"), info["labels"], info["times"], ...
     Sessions with different window lengths are cut to the shortest.
     """
-    rows = list_sessions(root, include_simulated)
+    rows = list_sessions(root, include_simulated, include_superseded=sessions is not None)
     if bucket is not None:
         want = {bucket} if isinstance(bucket, str) else set(bucket)
         rows = [r for r in rows if r.get("bucket") in want]

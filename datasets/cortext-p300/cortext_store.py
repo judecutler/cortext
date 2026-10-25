@@ -173,6 +173,7 @@ def scan_local(root=None):
                 "artifact_fraction": q.get("artifact_fraction"), "pipeline_version": m.get("pipeline_version"),
                 "size_mb": round(dir_size(folder) / 1e6, 2), "uploaded": bool(s.get("uploaded_at") or s.get("downloaded_at")),
                 "uploaded_at": s.get("uploaded_at"), "complete": (folder / RAW_FILE).exists(),
+                "superseded_by": m.get("superseded_by") or "",
             })
     rows.sort(key=lambda r: str(r["recorded"] or ""), reverse=True)
     return rows

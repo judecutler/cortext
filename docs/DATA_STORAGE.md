@@ -39,6 +39,14 @@ A bucket is just a label on a session (`pilot`, `final`, `bad-electrodes`…) st
 moving a session between buckets is instant and cannot lose data. Use `load_epochs(bucket="final")` to train on one bucket.
 Changing a bucket marks the session as "not uploaded" so the next upload carries the new label.
 
+## Superseded sessions (redone in the app)
+
+When the operator presses **Redo this session** (or **Restart session**), the first recording is kept and its
+`meta.json` gets `superseded_by: <id of the redo>`; the redo has `redo_of`. `load_epochs`, `load_imagery`,
+`list_sessions` and `train_p300.py` leave superseded sessions out by default. Pass `include_superseded=True` /
+`--include-superseded`, or name the session in `sessions=[...]` / `--sessions`, to use it anyway. The operator can
+remove the mark from the session's summary page (*Use it after all*); upload again to share the change.
+
 ## Privacy
 
 Keep the repo **private**. Use participant codes, never names; session notes are included in `meta.json`.

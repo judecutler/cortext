@@ -6,6 +6,7 @@ import { loadSession, exportSessionZip } from '../exporter.js';
 import { INVALID_REASONS } from '../schema.js';
 import { buildDataset } from '../dataset.js';
 import { deleteSessionsFlow } from '../sessionActions.js';
+import { record } from '../undo.js';
 
 let rebuildTimer = null;
 
@@ -25,7 +26,8 @@ export async function renderReview(root, app, sessionId) {
 
   const tbody = h('tbody');
   const note = (t) => h('input', { type: 'text', value: t.invalid_note || '', placeholder: 'note', style: { width: '150px' }, onchange: (e) => update(t, t.valid ? 'valid' : t.invalid_reason, e.target.value) });
-  async function update(t, v, noteText) {
+  async function update(t, v, noteText, { undoable = true } = {}) {
+    const before = { v: t.valid ? 'valid' : t.invalid_reason, note: t.invalid_note };
     if (v === 'valid') applyValidity(t, { valid: true, note: noteText ?? t.invalid_note, by: 'operator(review)' });
     else applyValidity(t, { valid: false, reason: v, note: noteText ?? t.invalid_note, by: 'operator(review)' });
     await db.put('trials', t);
@@ -33,6 +35,11 @@ export async function renderReview(root, app, sessionId) {
     // keep the shared dataset in sync with the reviewed validity flags
     clearTimeout(rebuildTimer);
     rebuildTimer = setTimeout(() => buildDataset(sessionId).catch(() => {}), 1500);
+    if (undoable) {
+      const after = { v, note: t.invalid_note };
+      const label = noteText !== undefined && v === before.v ? `Edited the note on #${t.trial_id}` : `Marked #${t.trial_id} ${v === 'valid' ? 'valid' : `invalid (${v})`}`;
+      record(label, () => update(t, before.v, before.note ?? '', { undoable: false }), () => update(t, after.v, after.note ?? '', { undoable: false }), { toast: noteText === undefined });
+    }
   }
   function draw() {
     tbody.replaceChildren(...trials.map((t) => {

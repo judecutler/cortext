@@ -13,6 +13,7 @@ import sys; sys.path.append("datasets/cortext-p300")
 from cortext_data import load_epochs, list_sessions, load_continuous, to_mne
 X, y, info = load_epochs()                       # real sessions, valid trials, artifact-free epochs
 X, y, info = load_epochs(bucket="final")         # only sessions labelled with that bucket
+# sessions the operator redid in the app ("superseded") are skipped; add include_superseded=True to keep them
 X, y, info = load_epochs(channels=["Pz", "POz", "Cz"], tmin=0.0, tmax=0.8)
 epochs = to_mne(X, info, y)                      # MNE EpochsArray (event 1 = target)
 
