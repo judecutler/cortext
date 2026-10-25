@@ -13,6 +13,13 @@ git add cortext-lab/models/library && git commit -m "P300 model for P01" && git 
 ```
 Add `--activate` to also make it the running model (copies it into `active/`).
 
+## No calibration yet? The "p3000 function"
+`library/p3000_function.npz` is a fixed spike detector, not a trained model: for each picture it takes the mean voltage
+240-480 ms after it appeared over Cz/Pz/POz/PO7/PO8, adds it up over repeats, and the picture with the biggest spike is
+the answer. Same for every person, works from the first trial, needs the default filter chain and the 8-channel Unicorn
+montage. Rebuild it with `python cortext-lab/pipeline/make_p3000_function.py` (`--activate` to make it the running
+model). A calibrated model should beat it once you have one; percentages are deliberately soft and uncalibrated.
+
 ## Choose which model runs
 - **On the website (easiest):** Agent → *Model* block lists the library and this laptop's calibrations, with who each
   was trained on, how many epochs, cross-validated accuracy and whether it fits the connected headset. **Use this**
