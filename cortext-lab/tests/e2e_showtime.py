@@ -58,13 +58,14 @@ def main():
     ap.add_argument("--trials", type=int, default=8)
     ap.add_argument("--muse", action="store_true", help="simulate a Muse headband instead of the 8-channel Unicorn")
     ap.add_argument("--sim-p300", choices=["off", "overlay", "replace"], default=None, help="bridge --sim-p300")
+    ap.add_argument("--no-headset", action="store_true", help="no EEG stream at all: the bridge's built-in simulator")
     a = ap.parse_args()
     tmp = tempfile.mkdtemp(prefix="cortext-show-")
     env = {**os.environ, "CORTEXT_DATASET_DIR": os.path.join(tmp, "ds"), "CORTEXT_DATA_DIR": os.path.join(tmp, "data"),
            "CORTEXT_BRIDGE_LOG_DIR": os.path.join(tmp, "logs")}
     fake = subprocess.Popen([sys.executable, os.path.join(ROOT, "eeg", "fake_eeg.py"), "--seed", "11", "--p300-uv", str(a.p300_uv)]
                             + (["--muse"] if a.muse else []),
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) if not a.no_headset else None
     bridge = subprocess.Popen([sys.executable, os.path.join(ROOT, "bridge", "bridge.py"), "--port", str(PORT)]
                               + (["--sim-p300", a.sim_p300] if a.sim_p300 else []), env=env,
                               stdout=open(os.path.join(tmp, "bridge.log"), "w"), stderr=subprocess.STDOUT)
@@ -73,7 +74,7 @@ def main():
         for _ in range(150):
             try:
                 st = json.loads(urllib.request.urlopen(BASE + "/api/status", timeout=1).read())
-                if st["eeg"].get("quality"):
+                if st["eeg"].get("quality") and (a.no_headset or not st["eeg"].get("internal")):
                     break
             except Exception:
                 pass
@@ -136,9 +137,13 @@ def main():
                 best = pred.get("best_option_id")
                 pct = round(100 * probs.get(best, 0))
                 assert pred.get("source") == "eeg" and pred.get("scorer") == "model", pred
-                assert pred.get("sim_p300") == (a.sim_p300 or "off"), pred
-                assert f"{pct}%" in cap and "Simulated EEG" in cap and "mock" not in cap, (cap, pct)   # real headset: "Based on Jude's brain waves..." (voice.test.mjs)
-                assert narr.get("simulated") is True
+                assert pred.get("sim_p300") == ("internal" if a.no_headset else a.sim_p300 or "off"), pred
+                if a.no_headset:   # built-in simulator: plain narrator line, no disclaimer (the presenter explains)
+                    assert f"{pct}%" in cap and "Jude" in cap and "Simulated" not in cap and "mock" not in cap, (cap, pct)
+                    assert narr.get("simulated") is False
+                else:
+                    assert f"{pct}%" in cap and "Simulated EEG" in cap and "mock" not in cap, (cap, pct)   # real headset: "Based on Jude's brain waves..." (voice.test.mjs)
+                    assert narr.get("simulated") is True
                 assert "Jude" not in narr["text"], narr    # the display name is never stored with the trial
                 stray = re.findall(r".{0,30}\b(?:null|undefined|NaN)\b.{0,30}", page.inner_text("body"))
                 assert not stray, stray
@@ -167,7 +172,7 @@ def main():
             assert sum(r["correct"] for r in rows) > a.trials / 4, rows   # better than chance (p3000 is weak: ~40% here)
         print("showtime OK")
     finally:
-        for proc in (bridge, fake):
+        for proc in (bridge, fake) if fake else (bridge,):
             proc.terminate()
         shutil.rmtree(tmp, ignore_errors=True)
 

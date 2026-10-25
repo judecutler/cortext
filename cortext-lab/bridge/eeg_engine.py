@@ -43,7 +43,10 @@ RING_SECONDS = 90
 # evidence. The UI stays clean (the presenter explains it); every prediction and calibrated model carries
 # "sim_p300": <mode> in its data so analysis can tell these apart.
 SIM_MODES = ("off", "overlay", "replace")
-SIM_DEFAULT_UV = 15.0
+# No headset stream for FALLBACK_AFTER_S seconds -> the bridge streams its own simulated EEG (Unicorn layout, 250 Hz,
+# with a simulated P300) so the experiment can always run. A real stream showing up takes over within ~2 s.
+FALLBACK_AFTER_S = 5.0
+SIM_DEFAULT_UV = 30.0
 SIM_NOISE_UV = 8.0
 # per-electrode weights (P300: parietal-central / Muse temporo-parietal; VEP: occipital), as in fake_eeg.py
 SIM_P300_W = {"Fz": .3, "C3": .5, "Cz": .8, "C4": .5, "Pz": 1., "PO7": .6, "POz": .9, "PO8": .6, "Oz": .5, "O1": .4, "O2": .4,
@@ -125,6 +128,9 @@ class EEGEngine:
         self.simraw = self.simf = None   # simulated background EEG (raw / filtered by a copy of the chain), same stamps
         self.sim_filter = None
         self._sim_reset()
+        self.fallback_enabled = os.environ.get("CORTEXT_SIM_FALLBACK", "1") != "0"
+        self.internal = False          # True while the bridge's own simulated EEG is the input
+        self._int_next = None
 
     # ---------- session recording ----------
     def start_session(self, session_id):
@@ -189,12 +195,26 @@ class EEGEngine:
         last_sample = None
         count, t_window = 0, time.time()
         last_quality = 0.0
+        no_stream_since = time.time()
+        next_resolve = 0.0
         while True:
             try:
                 if inlet is None:
-                    inlet = self._connect()
+                    now = time.time()
+                    if now >= next_resolve:
+                        inlet = self._connect(timeout=0.3 if self.internal else 1.0)
+                        next_resolve = now + 2.0
                     if inlet is None:
-                        time.sleep(1.0)
+                        if self.fallback_enabled and P and now - no_stream_since >= FALLBACK_AFTER_S:
+                            self._internal_step()
+                            if now - last_quality > 0.5:
+                                last_quality = now
+                                self._update_quality()
+                            if self.scorer:
+                                self.scorer.tick()
+                            time.sleep(0.04)
+                        else:
+                            time.sleep(0.2)
                         continue
                     count, t_window, last_sample = 0, time.time(), None
                 chunk, stamps = inlet.pull_chunk(timeout=0.05, max_samples=1024)
@@ -219,18 +239,22 @@ class EEGEngine:
                     self.scorer.tick()
             except Exception as exc:
                 self.info = {"found": False, "error": repr(exc)}
+                self.internal = False
+                no_stream_since = time.time()
                 inlet = None
                 with self.lock:
                     self._close_csv()
                 time.sleep(1.0)
 
-    def _connect(self):
+    def _connect(self, timeout=1.0):
         pl = self.pylsl
-        found = (pl.resolve_byprop("name", self.stream_name, timeout=1.0) if self.stream_name
-                 else pl.resolve_byprop("type", "EEG", timeout=1.0))
+        found = (pl.resolve_byprop("name", self.stream_name, timeout=timeout) if self.stream_name
+                 else pl.resolve_byprop("type", "EEG", timeout=timeout))
         if not found:
-            self.info = {"found": False}
+            if not self.internal:
+                self.info = {"found": False}
             return None
+        self.internal = False
         found.sort(key=lambda s: ("FAKE" in s.name().upper(), s.name()))  # prefer a real headset over the simulator
         inlet = pl.StreamInlet(found[0], max_buflen=30, processing_flags=pl.proc_clocksync | pl.proc_dejitter)
         full = inlet.info(timeout=2.0)
@@ -346,6 +370,49 @@ class EEGEngine:
                 self.ts, self.raw, self.filt, self.qfilt = self.ts[-keep:], self.raw[-keep:], self.filt[-keep:], self.qfilt[-keep:]
                 self.simraw, self.simf = self.simraw[-keep:], self.simf[-keep:]
 
+    # ---------- built-in simulated EEG (no headset stream) ----------
+    def _internal_step(self):
+        """Stream the bridge's own simulated EEG up to ~150 ms ago (the P300 is added at decode time, see window())."""
+        pl = self.pylsl
+        upto = pl.local_clock() - 0.15
+        if not self.internal:
+            labels = list(P.UNICORN_MONTAGE)
+            with self.lock:
+                self.labels, self.srate, self.scale, self.keep, self.ts_shift = labels, 250.0, 1.0, None, 0.0
+                self.ts = self.raw = self.filt = self.qfilt = None
+                self.qfilter = P.CausalFilter(self.srate, len(labels))
+                self.filter = self._build_chain(self.filter_spec)
+                self._sim_reset()
+                self._int_rng = np.random.default_rng()
+                self._int_zi = np.zeros((1, len(labels)))
+                self._int_dc = self._int_rng.uniform(-3000, 3000, len(labels))
+                self._int_next = upto - 0.5
+                self.internal = True
+                self.info = {"found": True, "name": "CorText built-in simulator", "type": "EEG", "channels": len(labels),
+                             "labels": labels, "nominal_srate": self.srate, "measured_srate": self.srate, "age_ms": 0,
+                             "simulated": True, "internal": True, "source_id": "cortext-bridge-sim", "hostname": "",
+                             "device": "Built-in simulator (no headset stream)", "quality": [], "bands": {},
+                             "recording": None, "dropped_channels": []}
+                if self.session_id and not self.csv_file:
+                    self._open_csv()
+            print("  EEG: no headset stream, using the bridge's built-in simulated EEG (a real stream takes over)")
+            if self.scorer:
+                self.scorer.on_stream(labels)
+                self._match_p3000(labels)
+        k = int((upto - self._int_next) * self.srate)
+        if k <= 0:
+            return
+        from scipy.signal import lfilter
+        t = self._int_next + np.arange(k) / self.srate
+        self._int_next += k / self.srate
+        n = len(self.labels)
+        pink, self._int_zi = lfilter([1.0], [1.0, -0.97], self._int_rng.normal(0, SIM_NOISE_UV * 0.25, (k, n)), axis=0, zi=self._int_zi)
+        x = (self._int_dc + pink + self._int_rng.normal(0, SIM_NOISE_UV * 0.5, (k, n))
+             + 6 * self._sim_alpha_w * np.sin(2 * np.pi * 10 * t[:, None] + self._sim_phase) + 3 * np.sin(2 * np.pi * 60 * t)[:, None])
+        self._ingest(x.tolist(), t.tolist())
+        self.info["delay_ms"] = round((pl.local_clock() - t[-1]) * 1000)
+        self.info["age_ms"] = 0
+
     # ---------- simulated P300 (see SIM_MODES) ----------
     def _sim_reset(self):
         """New stream (or startup): fresh simulated-noise generator and a copy of the running chain to filter it."""
@@ -408,7 +475,11 @@ class EEGEngine:
         return self.sim_status()
 
     def sim_status(self):
-        return {"mode": self.sim_mode, "uv": self.sim_uv, "modes": list(SIM_MODES)}
+        return {"mode": self.sim_mode, "uv": self.sim_uv, "modes": list(SIM_MODES), "internal": self.internal,
+                "fallback": self.fallback_enabled,
+                "decoder_input": "built-in simulator" if self.internal else
+                ("headset" if self.sim_mode == "off" else "headset + simulated P300" if self.sim_mode == "overlay"
+                 else "simulated P300")}
 
     # ---------- filter chain ----------
     def _build_chain(self, spec):
@@ -485,6 +556,8 @@ class EEGEngine:
             i = np.searchsorted(self.ts, t_from)
             ts = self.ts[i:].copy()
             mode = self.sim_mode
+            if self.internal and mode == "off":
+                mode = "overlay"             # built-in simulated EEG: the simulated P300 rides on it
             if mode == "replace" and self.simf is not None:
                 x = self.simf[i:].copy()
             else:

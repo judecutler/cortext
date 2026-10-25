@@ -851,8 +851,8 @@ class Handler(SimpleHTTPRequestHandler):
             def finish():
                 base = {"type": "prediction", "trial_id": t["trial_id"], "category_scores": {},
                         "eeg_stream": (eng.info.get("name") if eng else None),
-                        "simulated": bool(eng and eng.info.get("simulated")),
-                        "sim_p300": (eng.sim_mode if eng else "off")}
+                        "simulated": bool(eng and eng.info.get("simulated") and not eng.internal),
+                        "sim_p300": ("internal" if eng and eng.internal else eng.sim_mode if eng else "off")}
                 if scorer is None or not eng.info.get("found"):
                     why = "no EEG stream" if (eng and scorer) else (eeg_engine.NUMPY_ERROR or "pylsl not installed")
                     send({**base, "best_option_id": None, "confidence": None, "p300": {}, "error": why})
@@ -900,7 +900,9 @@ def main():
                     help="decoder input for a demo with an unreliable headset: 'replace' = score simulated EEG with a "
                          "simulated P300 on the true answer (the headset still drives the live visuals and is recorded); "
                          "'overlay' = headset EEG + simulated P300. Also switchable on the Experiment tab's Headset card.")
-    ap.add_argument("--sim-p300-uv", type=float, default=None, help="simulated P300 amplitude in µV (default 15)")
+    ap.add_argument("--sim-p300-uv", type=float, default=None, help="simulated P300 amplitude in µV (default 30)")
+    ap.add_argument("--no-sim-fallback", action="store_true",
+                    help="never stream the bridge's built-in simulated EEG when no headset stream is found")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -926,6 +928,8 @@ def main():
                 state.eeg.set_sim(args.sim_p300, args.sim_p300_uv)
             except ValueError as exc:
                 sys.exit(f"--sim-p300: {exc}")
+        if args.no_sim_fallback:
+            state.eeg.fallback_enabled = False
         if state.eeg.sim_mode != "off":
             print(f"  Decoder input: simulated P300 ({state.eeg.sim_mode}, {state.eeg.sim_uv:g} µV)")
         print(f"  P300 model: {os.path.basename(model_path) if model_path else 'none (adapts to the session after 5 trials)'}"

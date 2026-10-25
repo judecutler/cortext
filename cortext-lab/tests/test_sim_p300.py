@@ -52,7 +52,7 @@ def main():
                 pass
             time.sleep(0.2)
         eeg = st["eeg"]
-        assert eeg["sim_p300"]["mode"] == "off" and eeg["sim_p300"]["uv"] == 15.0, eeg["sim_p300"]
+        assert eeg["sim_p300"]["mode"] == "off" and eeg["sim_p300"]["uv"] == 30.0, eeg["sim_p300"]
         assert "p3000" in (eeg["scorer"]["model_file"] or ""), eeg["scorer"]
         assert post("/api/eeg/sim", {"mode": "bogus"})["ok"] is False
         assert post("/api/eeg/sim", {"uv": 99})["ok"] is False
@@ -105,9 +105,9 @@ def main():
         assert acc_off <= 0.6, acc_off
 
         r = post("/api/eeg/sim", {"mode": "replace"})
-        assert r["ok"] and r["mode"] == "replace" and r["uv"] == 15.0, r
+        assert r["ok"] and r["mode"] == "replace" and r["uv"] == 30.0, r
         acc_rep = run(16, "replace")
-        print(f"decoder on the simulated P300 (replace, 15 µV), same p3000 function: {acc_rep:.2f}")
+        print(f"decoder on the simulated P300 (replace, 30 µV), same p3000 function: {acc_rep:.2f}")
         assert acc_rep >= 0.6, acc_rep
 
         tr = json.loads(T.get("/api/eeg/trace?seconds=3")[1])

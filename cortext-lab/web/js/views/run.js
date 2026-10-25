@@ -423,6 +423,7 @@ export function renderRun(root, app) {
     eegText.innerHTML = !eeg.found ? '<span class="bad">no EEG stream</span>'
       : `${esc(eeg.device || eeg.name)}${eeg.simulated ? ' <b class="warn">SIMULATED</b>' : ''}<br>` +
         `${q.length - bad.length}/${q.length} electrodes good${bad.length ? ': <span class="warn">' + esc(bad.map((x) => `${x.label} ${x.status}`).join(', ')) + '</span>' : ''}<br>` +
+        `decoder input: <b>${esc(eeg.sim_p300?.decoder_input || 'headset')}</b><br>` +
         `recording: ${eeg.recording ? esc(String(eeg.recording.samples)) + ' samples' : '<span class="warn">no</span>'} · scorer ${esc(eeg.scorer?.active ?? '–')} (${eeg.scorer?.adaptive_trials ?? 0} trials learned)`;
   });
 
