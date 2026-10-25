@@ -111,7 +111,7 @@ def main():
             lat = time.time() - t0
             assert lat < 3.0, f"prediction took {lat:.2f}s (app waits 3 s)"
             assert pred["trial_id"] == trial_id and pred["simulated"] is True
-            assert abs(sum(pred["probabilities"].values()) - 1) < 1e-6
+            assert abs(sum(pred["probabilities"].values()) - 1) < 1e-6, pred
             mark("trial_end", trial_id=trial_id, true_answer_id=truth)
             results.append((pred["scorer"], pred["best_option_id"] == truth, pred["n_epochs_used"], pred["n_epochs"], round(lat, 2)))
             time.sleep(0.9)   # let the trial's EEG arrive so it can join the adaptive pool

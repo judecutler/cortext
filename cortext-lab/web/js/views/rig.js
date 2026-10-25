@@ -4,7 +4,7 @@ import { h } from '../util.js';
 import { DEVICES } from '../schema.js';
 import { loadSettings, patchSettings, loadParticipant, saveParticipant } from '../settings.js';
 import { HeadMap, Traces, EEGFeed, mapValues } from '../brainviz.js';
-import { storageInfo, uploadPending, downloadFromHub, createHubRepo, rawEegInfo, startRawRecording, stopRawRecording, pushRawFile, uploadRawFile } from '../dataset.js';
+import { storageInfo, uploadPending, downloadFromHub, createHubRepo, rawEegInfo, startRawRecording, stopRawRecording, pushRawFile, uploadRawFile, setSimP300 } from '../dataset.js';
 import { Voice, NARRATOR_MOODS, EDGE_VOICES, browserVoices, narrationFacts, composeNarration } from '../voice.js';
 
 export const row = (label, el, hint) => h('div', { class: 'field' }, h('label', {}, label), el, hint || null);
@@ -59,11 +59,31 @@ export function headsetCard(app, { onFirstStream } = {}) {
   const hsNote = h('div', { class: 'muted small' });
   const hsMap = h('canvas', { class: 'headmap-sm' });
   const hsTrace = h('canvas', { class: 'traces-sm' });
+  // Decoder input (operator control): the headset always drives the live visuals; the decoder can score it, or a
+  // simulated P300 added to it, or a simulated P300 on simulated background EEG (for an unreliable headset).
+  const simMode = h('select', { class: 'sim-mode', title: 'What the P300 decoder scores' },
+    h('option', { value: 'off' }, 'Headset EEG'), h('option', { value: 'overlay' }, 'Headset EEG + simulated P300'),
+    h('option', { value: 'replace' }, 'Simulated P300 (headset drives the visuals)'));
+  const simUv = h('input', { type: 'number', class: 'sim-uv', min: 0, max: 50, step: 1, style: { width: '4.5em' }, title: 'Simulated P300 amplitude (µV)' });
+  const simMsg = h('span', { class: 'small muted' });
+  let simBusy = false;
+  async function applySim() {
+    simBusy = true;
+    simMsg.textContent = '';
+    try {
+      const r = await setSimP300({ mode: simMode.value, uv: simUv.value === '' ? undefined : Number(simUv.value) });
+      simMsg.textContent = r.ok ? '' : (r.error || 'not applied');
+    } catch (e) { simMsg.textContent = 'bridge offline'; }
+    simBusy = false;
+  }
+  simMode.addEventListener('change', applySim);
+  simUv.addEventListener('change', applySim);
+  const simRow = h('div', { class: 'small sim-row', style: { marginTop: '6px' } }, 'Decoder input ', simMode, ' ', simUv, ' µV ', simMsg);
   const el = h('div', { class: 'card headset-card span2', id: 'headset' },
     h('div', { class: 'card-head' }, h('h2', {}, 'Headset'),
       h('span', {}, h('a', { class: 'btn small', href: '#/agent', title: 'Filters and model that turn this signal into an answer' }, 'Agent →'), ' ',
         h('a', { class: 'btn small', href: '#/eeg' }, 'EEG monitor →'))),
-    h('div', { class: 'hs-grid' }, h('div', {}, hsStatus, hsChips, hsNote), hsMap, hsTrace));
+    h('div', { class: 'hs-grid' }, h('div', {}, hsStatus, hsChips, hsNote, simRow), hsMap, hsTrace));
   const headMap = new HeadMap(hsMap, { compact: true });
   const traces = new Traces(hsTrace);
   const feed = new EEGFeed({ traceSeconds: 4, traceMs: 300, erpMs: 60000 }).start();
@@ -71,6 +91,13 @@ export function headsetCard(app, { onFirstStream } = {}) {
   function update() {
     const b = app.bridge.status();
     const eeg = b.eeg || {};
+    const sim = eeg.sim_p300;
+    simRow.style.display = sim ? '' : 'none';
+    if (sim && !simBusy && document.activeElement !== simMode && document.activeElement !== simUv) {
+      simMode.value = sim.mode;
+      simUv.value = sim.uv;
+      simUv.disabled = sim.mode === 'off';
+    }
     if (!b.connected) {
       hsStatus.innerHTML = '<span class="dot red"></span><b>Bridge offline</b> — run <code>python cortext-lab/bridge/bridge.py</code> and open this page from http://localhost:8000';
     } else if (!eeg.found) {

@@ -45,7 +45,7 @@ export class Predictor {
           category_scores: m.category_scores || {}, probabilities,
           probabilities_calibrated: m.probabilities_calibrated ?? !!own,
           // live-EEG extras (absent for other servers)
-          scorer: m.scorer, simulated: !!m.simulated, eeg_stream: m.eeg_stream, error: m.error,
+          scorer: m.scorer, simulated: !!m.simulated, sim_p300: m.sim_p300, eeg_stream: m.eeg_stream, error: m.error,
           n_epochs: m.n_epochs, n_epochs_used: m.n_epochs_used, n_epochs_rejected: m.n_epochs_rejected,
         });
         this._resolve = null;
