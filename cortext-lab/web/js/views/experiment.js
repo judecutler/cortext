@@ -1,12 +1,13 @@
 import { h } from '../util.js';
 import { loadSettings, saveSettings, patchSettings, loadPlan, savePlan, loadParticipant, saveParticipant, estimateDurations, DEFAULT_SETTINGS } from '../settings.js';
-import { loadStimuli, buildTrialSpecs, generatePlan, rephrase, specsFromPlan, shuffled } from '../stimuli.js';
+import { loadStimuli, generatePlan, rephrase, shuffled, categoriesOf } from '../stimuli.js';
 import { listPresets, getPreset, savePreset, deletePreset, exportPreset, importPresetFile, isBuiltin, PRESET_KEYS } from '../presets.js';
-import { newSessionRecord } from '../session.js';
+import { prepareLaunch, goRun } from '../launch.js';
+import { record, snapshot } from '../undo.js';
 import { listTrialTypes, getTrialType } from '../trialtypes/index.js';
-import { buildSetFromFiles, saveSet, listSets, getSet, materializeSet, stimuliSnapshot } from '../stimulusSets.js';
+import { buildSetFromFiles, saveSet, listSets, getSet, materializeSet } from '../stimulusSets.js';
 import { db } from '../db.js';
-import { subTabs, toast, confirmDialog } from '../ui.js';
+import { subTabs, toast } from '../ui.js';
 
 const MODE_HELP = {
   mcq_flash: 'The answer tiles stay on screen and light up one at a time (like a P300 speller). Afterwards you click the answer.',
@@ -47,8 +48,10 @@ export async function renderExperiment(root, app) {
   ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
   drop.addEventListener('drop', (e) => handleFiles(e.dataTransfer.files));
-  const stimCard = h('div', { class: 'card' }, h('h2', {}, 'Stimulus set'),
+  const stimCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'Stimulus set'),
+      h('a', { class: 'btn small', href: '#/library', title: 'See every category with its images; drag to rearrange, add or remove' }, 'Organise images & categories →')),
     h('div', { class: 'field' }, h('label', {}, 'Use'), sourceSel),
+    stimInfo,
     pathRow,
     h('h3', { style: { marginTop: '12px' } }, 'Upload new stimuli'),
     drop,
@@ -60,7 +63,7 @@ export async function renderExperiment(root, app) {
     h('div', { class: 'field' }, h('label', {}, 'Set name'), nameInput),
     h('small', { class: 'muted', style: { display: 'block', marginBottom: '6px' } },
       'Images are matched to config items by file name (folders are ignored). With no .json, a folder of images becomes the stimulus list: file name = item, sub-folder name = category. Uploaded sets stay in this browser for reuse.'),
-    uploadMsg, stimInfo);
+    uploadMsg);
 
   // ---------- other cards ----------
   const typeCard = h('div', { class: 'card' }, h('h2', {}, 'Experiment'),
@@ -108,27 +111,41 @@ export async function renderExperiment(root, app) {
   const wordingInput = h('input', { type: 'text', placeholder: 'Which one is the {label}?', style: { width: '100%' } });
   const itemName = (id) => { const it = stimuli?.byId?.[id] || stimuli?.items?.find((i) => i.id === id); return it ? (it.label || it.text || id) : `${id} (missing)`; };
   const persistPlan = () => { savePlan(plan); refresh(); };
+  /** Every change to the list goes through here so it can be undone (Ctrl/Cmd+Z). quiet: no toast for small, visible moves. */
+  function editPlan(label, fn, { quiet = false } = {}) {
+    const before = snapshot(plan);
+    if (fn() === false) return;
+    const after = snapshot(plan);
+    persistPlan(); renderPlan();
+    const put = (v) => () => { plan = snapshot(v); persistPlan(); renderPlan(); };
+    record(label, put(before), put(after), { toast: !quiet });
+  }
   function renderPlan() {
     planMsg.textContent = plan.length ? `${plan.length} question${plan.length === 1 ? '' : 's'} in the list.` : 'The list is empty. Use “Generate from stimulus set” or “Add question”.';
     planHost.replaceChildren(...plan.map((q, i) => {
-      const move = (arr, a, b) => { [arr[a], arr[b]] = [arr[b], arr[a]]; persistPlan(); renderPlan(); };
+      const swap = (arr, a, b) => { [arr[a], arr[b]] = [arr[b], arr[a]]; };
       const chips = q.options.map((id, j) => h('span', { class: `chip${id === q.target ? ' answer' : ''}`, title: id === q.target ? 'Correct answer' : '' },
         h('span', { class: 'chip-name' }, itemName(id)),
-        h('button', { class: 'chip-btn', type: 'button', 'aria-label': 'Move earlier', disabled: j === 0, onclick: () => move(q.options, j, j - 1) }, '◀'),
-        h('button', { class: 'chip-btn', type: 'button', 'aria-label': 'Move later', disabled: j === q.options.length - 1, onclick: () => move(q.options, j, j + 1) }, '▶'),
-        h('button', { class: 'chip-btn', type: 'button', 'aria-label': 'Remove image', disabled: q.options.length <= 2, onclick: () => { q.options.splice(j, 1); if (!q.options.includes(q.target)) q.target = q.options[0]; persistPlan(); renderPlan(); } }, '✕')));
+        h('button', { class: 'chip-btn', type: 'button', 'aria-label': 'Move earlier', disabled: j === 0, onclick: () => editPlan(`Moved ${itemName(id)} earlier in Q${i + 1}`, () => swap(q.options, j, j - 1), { quiet: true }) }, '◀'),
+        h('button', { class: 'chip-btn', type: 'button', 'aria-label': 'Move later', disabled: j === q.options.length - 1, onclick: () => editPlan(`Moved ${itemName(id)} later in Q${i + 1}`, () => swap(q.options, j, j + 1), { quiet: true }) }, '▶'),
+        h('button', { class: 'chip-btn', type: 'button', 'aria-label': 'Remove image', title: q.options.length <= 2 ? 'A question needs at least 2 images' : 'Remove this image', disabled: q.options.length <= 2,
+          onclick: () => editPlan(`Removed ${itemName(id)} from Q${i + 1}`, () => { q.options.splice(j, 1); if (!q.options.includes(q.target)) q.target = q.options[0]; }) }, '✕')));
+      // "+ image" grouped by category, so a long set stays easy to scan
       const free = (stimuli?.items || []).filter((it) => !q.options.includes(it.id));
-      const addSel = h('select', { 'aria-label': 'Add an image', onchange: (e) => { if (e.target.value) { q.options.push(e.target.value); persistPlan(); renderPlan(); } } },
-        h('option', { value: '' }, '+ image'), ...free.map((it) => h('option', { value: it.id }, it.label || it.text || it.id)));
-      const ansSel = h('select', { 'aria-label': 'Correct answer', onchange: (e) => { q.target = e.target.value; persistPlan(); renderPlan(); } },
+      const groups = stimuli ? categoriesOf({ items: free }) : [];
+      const addSel = h('select', { 'aria-label': 'Add an image', onchange: (e) => { const v = e.target.value; if (v) editPlan(`Added ${itemName(v)} to Q${i + 1}`, () => { q.options.push(v); }, { quiet: true }); } },
+        h('option', { value: '' }, '+ image'),
+        ...groups.map((c) => h('optgroup', { label: c }, ...free.filter((it) => it.category === c).map((it) => h('option', { value: it.id }, it.label || it.text || it.id)))));
+      const ansSel = h('select', { 'aria-label': 'Correct answer', onchange: (e) => { const v = e.target.value; editPlan(`Set Q${i + 1}’s answer to ${itemName(v)}`, () => { q.target = v; }, { quiet: true }); } },
         ...q.options.map((id) => h('option', { value: id, selected: id === q.target }, itemName(id))));
       return h('div', { class: 'planrow' },
         h('div', { class: 'planrow-head' }, h('b', {}, `Q${i + 1}`),
           h('input', { type: 'text', value: q.prompt, class: 'plan-prompt', 'aria-label': `Question ${i + 1} wording`, oninput: (e) => { q.prompt = e.target.value; persistPlan(); } }),
-          h('button', { class: 'btn small', type: 'button', title: 'Move question up', disabled: i === 0, onclick: () => { const t = plan[i - 1]; plan[i - 1] = plan[i]; plan[i] = t; persistPlan(); renderPlan(); } }, '↑'),
-          h('button', { class: 'btn small', type: 'button', title: 'Move question down', disabled: i === plan.length - 1, onclick: () => { const t = plan[i + 1]; plan[i + 1] = plan[i]; plan[i] = t; persistPlan(); renderPlan(); } }, '↓'),
-          h('button', { class: 'btn small', type: 'button', title: 'Shuffle this question’s images', onclick: () => { q.options = shuffled(q.options); persistPlan(); renderPlan(); } }, '🔀'),
-          h('button', { class: 'btn small danger', type: 'button', title: 'Remove question', onclick: () => { plan.splice(i, 1); persistPlan(); renderPlan(); } }, '✕')),
+          h('button', { class: 'btn small', type: 'button', title: 'Move question up', disabled: i === 0, onclick: () => editPlan(`Moved Q${i + 1} up`, () => swap(plan, i, i - 1), { quiet: true }) }, '↑'),
+          h('button', { class: 'btn small', type: 'button', title: 'Move question down', disabled: i === plan.length - 1, onclick: () => editPlan(`Moved Q${i + 1} down`, () => swap(plan, i, i + 1), { quiet: true }) }, '↓'),
+          h('button', { class: 'btn small', type: 'button', title: 'Shuffle this question’s images', onclick: () => editPlan(`Shuffled Q${i + 1}’s images`, () => { q.options = shuffled(q.options); }) }, '🔀'),
+          h('button', { class: 'btn small', type: 'button', title: 'Duplicate this question', onclick: () => editPlan(`Duplicated Q${i + 1}`, () => { plan.splice(i + 1, 0, snapshot(q)); }) }, '⧉'),
+          h('button', { class: 'btn small danger', type: 'button', title: 'Remove question', onclick: () => editPlan(`Removed Q${i + 1} (“${q.prompt}”)`, () => { plan.splice(i, 1); }) }, '✕')),
         h('div', { class: 'planrow-body' }, h('div', { class: 'chips' }, ...chips, addSel), h('label', { class: 'plan-answer' }, 'Answer ', ansSel)));
     }));
   }
@@ -142,24 +159,26 @@ export async function renderExperiment(root, app) {
       planBtn('Generate from stimulus set', () => {
         if (!needStim()) return;
         const o = read();
-        try { plan = generatePlan(stimuli, { n: o.n_trials, optionsPerTrial: o.options_per_trial }); } catch (e) { toast(e.message, 'bad'); return; }
-        persistPlan(); renderPlan();
+        let fresh;
+        try { fresh = generatePlan(stimuli, { n: o.n_trials, optionsPerTrial: o.options_per_trial }); } catch (e) { toast(e.message, 'bad'); return; }
+        editPlan(`Generated ${fresh.length} questions${plan.length ? ' (replacing the old list)' : ''}`, () => { plan = fresh; });
       }, 'Fills the list using “Questions” and “Options per question” from Design'),
-      planBtn('🔀 Shuffle questions', () => { plan = shuffled(plan); persistPlan(); renderPlan(); }, 'Randomize the order of the questions'),
-      planBtn('🔀 Shuffle images', () => { plan = plan.map((q) => ({ ...q, options: shuffled(q.options) })); persistPlan(); renderPlan(); }, 'Randomize image order inside every question'),
-      planBtn('🔀 Shuffle both', () => { plan = shuffled(plan).map((q) => ({ ...q, options: shuffled(q.options) })); persistPlan(); renderPlan(); }, 'Randomize question order and image order'),
+      planBtn('🔀 Shuffle questions', () => editPlan('Shuffled the question order', () => { plan = shuffled(plan); }), 'Randomize the order of the questions'),
+      planBtn('🔀 Shuffle images', () => editPlan('Shuffled the images in every question', () => { plan = plan.map((q) => ({ ...q, options: shuffled(q.options) })); }), 'Randomize image order inside every question'),
+      planBtn('🔀 Shuffle both', () => editPlan('Shuffled questions and images', () => { plan = shuffled(plan).map((q) => ({ ...q, options: shuffled(q.options) })); }), 'Randomize question order and image order'),
       planBtn('Add question', () => {
         if (!needStim()) return;
         const o = read(); const ids = shuffled(stimuli.items.map((x) => x.id)).slice(0, Math.max(2, Math.min(o.options_per_trial, stimuli.items.length)));
-        plan.push({ prompt: 'Which one is correct?', target: ids[0], options: ids }); persistPlan(); renderPlan();
+        editPlan('Added a question', () => { plan.push({ prompt: 'Which one is correct?', target: ids[0], options: ids }); }, { quiet: true });
       }),
-      planBtn('Clear list', async () => { if (plan.length && await confirmDialog({ title: 'Clear the question list?', body: 'This only empties the list on this page; saved presets are not touched.', confirmLabel: 'Clear', danger: true })) { plan = []; persistPlan(); renderPlan(); } })),
+      planBtn('Clear list', () => { if (plan.length) editPlan(`Cleared the list (${plan.length} questions)`, () => { plan = []; }); }, 'Empty the list (undo with Ctrl/Cmd+Z); saved presets are not touched')),
     h('div', { class: 'field' }, h('label', {}, 'Wording for all questions'), wordingInput,
       h('small', {}, 'Placeholders: {label} {text} {category} {id}, e.g. “Which one is the {label}?”.')),
     h('div', { class: 'ctrls' }, planBtn('Apply wording to all', () => {
       if (!needStim() || !wordingInput.value.trim()) return;
-      try { plan = rephrase(stimuli, plan, wordingInput.value.trim()); } catch (e) { toast(e.message, 'bad'); return; }
-      persistPlan(); renderPlan();
+      let next;
+      try { next = rephrase(stimuli, plan, wordingInput.value.trim()); } catch (e) { toast(e.message, 'bad'); return; }
+      editPlan('Applied the wording to every question', () => { plan = next; });
     })),
     planMsg, planHost);
 
@@ -186,9 +205,18 @@ export async function renderExperiment(root, app) {
   }
   presetSel.addEventListener('change', showPresetInfo);
   function snapshotPreset() { const cur = read(); return { settings: Object.fromEntries(PRESET_KEYS.map((k) => [k, cur[k]])), plan }; }
+  /** Everything a preset can change on this page, so loading one can be undone. */
+  function formState() { return { values: Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.type === 'checkbox' ? el.checked : el.value])), plan: snapshot(plan) }; }
+  async function restoreForm(st) {
+    for (const [k, v] of Object.entries(st.values)) { const el = inputs[k]; if (!el) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; }
+    plan = snapshot(st.plan);
+    updateModeUi(); updateSourceUi(); refresh(); savePlan(plan); renderPlan();
+    await loadChosen();
+  }
   async function loadPreset() {
     const p = getPreset(presetSel.value);
     if (!p) return;
+    const before = formState();
     // A preset that predates the imagery window has no imagery_ms: treat that as OFF so a value left in the form can't leak into it.
     for (const [k, v] of Object.entries({ imagery_ms: 0, ...p.settings })) {
       const el = inputs[k];
@@ -200,7 +228,8 @@ export async function renderExperiment(root, app) {
     else if (p.settings.use_plan === false) { /* keep the current list around, just not in use */ }
     updateModeUi(); updateSourceUi(); refresh(); savePlan(plan); renderPlan();
     await loadChosen();
-    toast(`Loaded “${presetSel.value}”.`, 'good');
+    const after = formState();
+    record(`Loaded preset “${presetSel.value}”`, () => restoreForm(before), () => restoreForm(after), { kind: 'good' });
   }
   const presetCard = h('div', { class: 'card wide' }, h('h2', {}, 'Presets'),
     h('div', { class: 'field' }, h('label', {}, 'Preset'), presetSel, presetDesc),
@@ -209,12 +238,17 @@ export async function renderExperiment(root, app) {
       planBtn('Update', () => {
         const n = presetSel.value;
         if (!n || isBuiltin(n)) { toast('Built-in presets cannot be changed; use “Save as new”.', 'warn'); return; }
-        try { savePreset(n, snapshotPreset()); toast(`Updated “${n}”.`, 'good'); fillPresetList(n); } catch (e) { toast(e.message, 'bad'); }
+        const old = getPreset(n);
+        try { savePreset(n, snapshotPreset()); fillPresetList(n); } catch (e) { toast(e.message, 'bad'); return; }
+        const now = getPreset(n);
+        record(`Updated preset “${n}”`, () => { savePreset(n, old); fillPresetList(n); }, () => { savePreset(n, now); fillPresetList(n); }, { kind: 'good' });
       }, 'Overwrite the selected preset with the current settings and list'),
       planBtn('Delete', async () => {
         const n = presetSel.value;
         if (!n || isBuiltin(n)) { toast('Built-in presets cannot be deleted.', 'warn'); return; }
-        if (await confirmDialog({ title: `Delete preset “${n}”?`, body: 'This removes it from this browser. Recorded sessions are not affected.', confirmLabel: 'Delete', danger: true })) { deletePreset(n); fillPresetList(); }
+        const p = getPreset(n);
+        deletePreset(n); fillPresetList();
+        record(`Deleted preset “${n}”`, () => { savePreset(n, p); fillPresetList(n); }, () => { deletePreset(n); fillPresetList(); });
       }),
       planBtn('Export…', () => { try { exportPreset(presetSel.value); } catch (e) { toast(e.message, 'bad'); } }, 'Download as a .json file to share'),
       planBtn('Import…', () => presetFile.click(), 'Load a preset .json from a teammate'), presetFile),
@@ -268,11 +302,14 @@ export async function renderExperiment(root, app) {
     patchSettings(Object.fromEntries(Object.keys(inputs).map((k) => [k, cur[k]])));   // remembered as you type; no need to start a session
   }
   function resetDefaults() {
+    const before = formState();
     for (const [k, el] of Object.entries(inputs)) {
       const v = DEFAULT_SETTINGS[k];
       if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
     }
     updateModeUi(); updateSourceUi(); refresh(); loadChosen();
+    const after = formState();
+    record('Reset the experiment settings to defaults', () => restoreForm(before), () => restoreForm(after));
   }
 
   async function refreshSources(select) {
@@ -295,9 +332,11 @@ export async function renderExperiment(root, app) {
         stimuli = await loadStimuli(pathInput.value);
         stimuli.source = { type: 'path', url: pathInput.value };
       }
-      const cats = [...new Set(stimuli.items.map((i) => i.category))];
+      const cats = categoriesOf(stimuli);
       renderPlan();
-      stimInfo.replaceChildren(`${stimuli.items.length} items in ${cats.length} categories (${cats.join(', ')}).`);
+      stimInfo.replaceChildren(`${stimuli.items.length} items in ${cats.length} categories: `,
+        h('span', { class: 'catchips' }, ...cats.map((c) => h('a', { class: 'catchip', href: '#/library', title: stimuli.items.filter((i) => i.category === c).map((i) => i.label || i.id).join(', ') },
+          c, h('b', {}, String(stimuli.items.filter((i) => i.category === c).length))))));
       if (stimuli.warnings.length) stimInfo.append(h('div', { class: 'warn' }, 'Warnings: ' + stimuli.warnings.join('; ')));
     } catch (e) { stimuli = null; stimInfo.replaceChildren(h('span', { class: 'bad' }, String(e.message))); }
   }
@@ -344,19 +383,11 @@ export async function renderExperiment(root, app) {
     try { await db.getAll('sessions'); } catch (e) { err.textContent = 'Local storage (IndexedDB) is unavailable: ' + e.message; return; }
     saveSettings(cur);
     saveParticipant({ ...who, notes: '' });   // notes belong to one session; the participant and device carry over
-    cur.seed = (Math.random() * 2 ** 31) >>> 0;
-    let specs;
+    let launched;
     try {
-      if (cur.use_plan) {
-        if (!plan.length) throw new Error('“Use this list” is on but the question list is empty.');
-        if (cur.shuffle_on_start) { plan = shuffled(plan).map((q) => ({ ...q, options: shuffled(q.options) })); savePlan(plan); renderPlan(); }
-        specs = specsFromPlan(stimuli, plan, { trialType: cur.trial_type, tileContent: cur.tile_content, fixedOrder: cur.order_mode === 'fixed' });
-        cur.n_trials = specs.length;
-        cur.question_plan = plan.map((q) => ({ prompt: q.prompt, target: q.target, options: q.options.slice() }));
-      } else specs = buildTrialSpecs(stimuli, { n: cur.n_trials, seed: cur.seed, optionsPerTrial: cur.options_per_trial, tileContent: cur.tile_content, trialType: cur.trial_type });
+      launched = prepareLaunch({ settings: cur, stimuli, plan, reshuffle: cur.use_plan && cur.shuffle_on_start, participant: pid, device: who.device, notes: who.notes });
     } catch (e) { err.textContent = e.message; return; }
-    const session = newSessionRecord({ participant_id: pid, device: who.device, notes: who.notes, settings: cur, stimuli, plannedTrials: specs.length, snapshot: stimuliSnapshot(stimuli) });
-    app.pending = { session, settings: cur, stimuli, specs };
-    location.hash = '#/run';
+    if (launched.plan && cur.shuffle_on_start) { plan = launched.plan; savePlan(plan); renderPlan(); }
+    goRun(app, launched.pending);
   }
 }

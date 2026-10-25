@@ -10,13 +10,38 @@ export function fmtBytes(n) {
 }
 
 let toastHost = null;
-/** A message that fades after a few seconds. kind: 'good' | 'warn' | 'bad' | ''. Errors stay longer. */
-export function toast(message, kind = '', ms = null) {
+/**
+ * A message that fades after a few seconds. kind: 'good' | 'warn' | 'bad' | ''. Errors stay longer.
+ * action: optional { label, fn, kbd } button inside the toast (e.g. Undo); the toast closes when it is used.
+ * group: a toast with the same group replaces the previous one (so repeated edits don't stack up a wall of toasts).
+ */
+export function toast(message, kind = '', ms = null, action = null, group = null) {
   if (!toastHost) { toastHost = h('div', { id: 'toasts', role: 'status', 'aria-live': 'polite' }); document.body.append(toastHost); }
-  const el = h('div', { class: `toast ${kind}` }, message, h('button', { class: 'toast-x', 'aria-label': 'Dismiss', onclick: () => el.remove() }, '×'));
+  if (group) toastHost.querySelectorAll(`.toast[data-group="${group}"]`).forEach((t) => t.remove());
+  const el = h('div', { class: `toast ${kind}`, dataset: group ? { group } : {} }, h('span', { class: 'toast-msg' }, message),
+    action ? h('button', { class: 'toast-act', type: 'button', onclick: () => { el.remove(); action.fn(); } }, action.label, action.kbd ? h('kbd', {}, action.kbd) : null) : null,
+    h('button', { class: 'toast-x', 'aria-label': 'Dismiss', onclick: () => el.remove() }, '×'));
   toastHost.append(el);
-  setTimeout(() => el.remove(), ms ?? (kind === 'bad' || kind === 'warn' ? 12000 : 4500));
+  setTimeout(() => el.remove(), ms ?? (action ? 8000 : kind === 'bad' || kind === 'warn' ? 12000 : 4500));
   return el;
+}
+
+/** Ask for one line of text. Resolves to the trimmed text, or null when cancelled. */
+export function promptDialog({ title, label = '', value = '', confirmLabel = 'OK', placeholder = '', hint = '' }) {
+  return new Promise((resolve) => {
+    const input = h('input', { type: 'text', value, placeholder, style: { width: '100%' }, autocomplete: 'off' });
+    const ok = h('button', { class: 'btn primary', type: 'submit' }, confirmLabel);
+    const dlg = h('dialog', { class: 'modal' },
+      h('form', { method: 'dialog', onsubmit: (e) => { e.preventDefault(); if (input.value.trim()) close(input.value.trim()); } },
+        h('h2', {}, title), label ? h('label', { class: 'dlg-label' }, label) : null, input, hint ? h('small', { class: 'muted' }, hint) : null,
+        h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', type: 'button', onclick: () => close(null) }, 'Cancel'), ok)));
+    let done = false;
+    function close(r) { if (done) return; done = true; dlg.close(); dlg.remove(); resolve(r); }
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(null); });
+    document.body.append(dlg);
+    dlg.showModal();
+    input.select();
+  });
 }
 
 /**
@@ -60,9 +85,10 @@ export function confirmDialog({ title, body, confirmLabel = 'OK', danger = false
   });
 }
 
-/** The two pages under the Experiment tab. */
+/** The pages under the Experiment tab, in the order you use them: organise stimuli, configure & run, look at recordings. */
 export function subTabs(active) {
   return h('div', { class: 'subtabs' },
+    h('a', { href: '#/library', class: active === 'library' ? 'on' : '' }, 'Images & categories'),
     h('a', { href: '#/experiment', class: active === 'configure' ? 'on' : '' }, 'Configure & run'),
     h('a', { href: '#/sessions', class: active === 'sessions' ? 'on' : '' }, 'Recorded sessions'));
 }

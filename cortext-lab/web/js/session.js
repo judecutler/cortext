@@ -42,6 +42,9 @@ export class SessionRunner {
     this._int = null; this._start = null; this._post = null; this._resp = null; this._pause = null;
     this._needStart = true;
     this._autoTimer = null;
+    this._finished = deferred();
+    /** Resolves once the session has ended and everything is saved (after stop() too). */
+    this.finished = this._finished.promise;
   }
 
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
@@ -86,6 +89,7 @@ export class SessionRunner {
       await this.markers.flush();
       await this.saveSession();
       this.setPhase('finished');
+      this._finished.resolve();
       this.ui.onFinished?.(this);
     }
   }
@@ -314,7 +318,7 @@ export class SessionRunner {
   }
 }
 
-export function newSessionRecord({ participant_id, device, notes, settings, stimuli, plannedTrials, snapshot = null }) {
+export function newSessionRecord({ participant_id, device, notes, settings, stimuli, plannedTrials, snapshot = null, links = {} }) {
   const seed = settings.seed ?? (Math.random() * 2 ** 31) >>> 0;
   const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
   const safe = (participant_id || 'anon').replace(/[^A-Za-z0-9_-]/g, '_');
@@ -327,5 +331,8 @@ export function newSessionRecord({ participant_id, device, notes, settings, stim
     planned_trials: plannedTrials, next_trial_id: 0, status: 'created', created_iso: new Date().toISOString(),
     user_agent: navigator.userAgent, screen: { w: screen.width, h: screen.height, dpr: window.devicePixelRatio },
     time_origin_wall_ms: performance.timeOrigin,
+    // How this session relates to earlier ones: previous_session_id (started with "Next session"),
+    // redo_of (a repeat of that session with the same questions). The repeated session gets superseded_by.
+    ...links,
   };
 }

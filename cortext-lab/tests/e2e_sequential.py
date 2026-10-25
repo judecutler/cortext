@@ -72,11 +72,13 @@ def main():
             # ---- upload a folder ----
             page.locator("input[webkitdirectory]").set_input_files(folder)
             page.wait_for_selector("text=Saved \"pets\"")
-            page.wait_for_selector("text=5 items in 2 categories (animals, objects)")
+            page.wait_for_selector("text=5 items in 2 categories")
+            cats = page.eval_on_selector_all(".catchip", "els => els.map(e => e.firstChild.textContent)")
+            assert cats == ["animals", "objects"], cats
             assert page.locator(".field:has(label:text-is('Use')) select").evaluate("s => s.value") == "set:pets"
             # ---- upload config + images (one image deliberately missing) ----
             page.fill("input[placeholder='name for this set (optional)']", "cfgset")
-            page.locator(".card:has(h2:text-is('Stimulus set')) input[type=file]:not([webkitdirectory])").set_input_files(
+            page.locator("input[type=file][accept*='image']:not([webkitdirectory])").set_input_files(
                 [os.path.join(cfg_dir, f) for f in os.listdir(cfg_dir)])
             page.wait_for_selector("text=Saved \"cfgset\"")
             warn = page.inner_text(".card:has(h2:text-is('Stimulus set'))")

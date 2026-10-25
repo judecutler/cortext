@@ -49,6 +49,7 @@ export const db = {
   put: (store, obj) => run(store, 'readwrite', (os) => os.put(obj)),
   bulkPut: (store, arr) => run(store, 'readwrite', (os) => { arr.forEach((o) => os.put(o)); }),
   get: (store, key) => run(store, 'readonly', (os) => os.get(key)),
+  delete: (store, key) => run(store, 'readwrite', (os) => os.delete(key)),
   getAll: (store) => run(store, 'readonly', (os) => os.getAll()),
   getAllBySession: (store, sessionId) =>
     run(store, 'readonly', (os) => os.index('session_id').getAll(IDBKeyRange.only(sessionId))),

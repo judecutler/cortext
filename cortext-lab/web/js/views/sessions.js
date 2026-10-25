@@ -76,7 +76,9 @@ export async function renderSessions(root, app) {
           } });
         return h('tr', { class: r.simulated ? 'sim' : '' },
           h('td', {}, sel),
-          h('td', { class: 'mono' }, r.id, r.simulated ? h('span', { class: 'pill warn', style: { marginLeft: '6px' } }, 'SIM') : null, b?.running ? h('span', { class: 'pill good', style: { marginLeft: '6px' } }, 'running') : null),
+          h('td', { class: 'mono' }, r.id, r.simulated ? h('span', { class: 'pill warn', style: { marginLeft: '6px' } }, 'SIM') : null,
+            r.browser?.superseded_by ? h('span', { class: 'pill warn', style: { marginLeft: '6px' }, title: `Redone as ${r.browser.superseded_by}; kept, but training leaves it out` }, 'superseded') : null,
+            r.browser?.redo_of ? h('span', { class: 'pill', style: { marginLeft: '6px' }, title: `Redo of ${r.browser.redo_of}` }, 'redo') : null, b?.running ? h('span', { class: 'pill good', style: { marginLeft: '6px' } }, 'running') : null),
           h('td', {}, r.participant), h('td', {}, r.device), h('td', {}, String(r.when).replace('T', ' ').slice(0, 16)),
           h('td', {}, r.browser?.status ?? '–'), h('td', {}, r.stats ? `${r.stats.valid} / ${r.stats.attempts}` : '–'),
           h('td', {}, bucket),
