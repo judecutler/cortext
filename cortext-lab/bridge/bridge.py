@@ -9,6 +9,8 @@
 * Clock sync: the page runs ping-pong rounds and reports (bridge_time - page_time). Markers carry the
   page's performance.now() timestamp, and the bridge converts it to an LSL timestamp, so network
   / event-loop delay does not shift the marker in the EEG time base.
+* Storage (see datasets/cortext-p300/cortext_store.py): the bridge lists, uploads to Hugging Face and really deletes
+  sessions on request from the web app (/api/sessions, /api/session/delete, /api/storage*).
 * EEG (see eeg_engine.py): finds the headset's LSL stream (eeg/stream_eeg.py), records it per session to
   logs/eeg_<session>.csv, reports signal quality / band power, and serves a live P300 scorer on ws://.../predict
   that the app uses when Predictor = "Live EEG".
@@ -32,6 +34,9 @@ import wsproto  # noqa: E402
 import eeg_engine  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "datasets", "cortext-p300"))
+import cortext_store as store  # noqa: E402  (stdlib only; huggingface_hub is imported lazily)
+
 try:
     import build_session  # noqa: E402  (needs numpy + scipy)
     BUILD_ERROR = None
@@ -81,6 +86,8 @@ class State:
         self.clients = set()
         self.datasets = {}  # session_id -> last build result / error
         self.build_lock = threading.Lock()
+        self.storage_lock = threading.RLock()   # one storage operation (upload / download / delete) at a time
+        self.sessions_seen = {}  # session_id -> {"last": wall time of its last marker, "ended": bool}
         if pylsl and not args.no_lsl:
             info = pylsl.StreamInfo(args.lsl_name, "Markers", 1, 0, "string", f"cortext-lab-{socket.gethostname()}")
             self.outlet = pylsl.StreamOutlet(info)
@@ -118,6 +125,9 @@ class State:
             lsl_ts = pylsl.local_clock() - transit / 1000.0
         if self.eeg is not None and self.eeg.scorer is not None:
             self.eeg.scorer.on_marker(msg, lsl_ts)
+        sid = msg.get("session_id")
+        if sid and msg.get("event") != "timing_flash":
+            self.sessions_seen[sid] = {"last": time.time(), "ended": msg.get("event") == "session_end"}
         if msg.get("event") == "session_end" and msg.get("session_id"):
             self.on_session_end(msg.get("session_id"))
         if self.outlet is not None:
@@ -140,6 +150,48 @@ class State:
             if self.csv_writer:
                 self.csv_writer.writerow(row)
                 self.csv_file.flush()
+
+    # ---- sessions on this machine: inventory and deletion ----
+    def session_is_running(self, session_id):
+        seen = self.sessions_seen.get(session_id)
+        return bool(seen and not seen["ended"] and time.time() - seen["last"] < 20)
+
+    def release_session(self, session_id):
+        """Close this session's open log files (Windows refuses to delete a file that is still open)."""
+        safe = store.safe_id(session_id)
+        with self.lock:
+            if self.csv_file and self.csv_path and os.path.basename(self.csv_path).startswith(f"markers_{safe}_"):
+                try:
+                    self.csv_file.close()
+                except OSError:
+                    pass
+                self.csv_file = self.csv_writer = self.csv_path = None
+        if self.eeg is not None:
+            self.eeg.stop_session(session_id)
+
+    def inventory(self):
+        """Everything this machine holds, one row per session: dataset folder and/or raw logs (the browser adds its own copy)."""
+        rows, logs = {}, store.scan_logs(LOG_DIR)
+        for r in store.scan_local():
+            rows[store.safe_id(r["session_id"])] = {**r, "has_dataset": True}
+        for safe, info in logs.items():
+            row = rows.setdefault(safe, {"session_id": safe, "has_dataset": False, "simulated": None, "uploaded": False})
+            row.update(has_logs=True, log_files=info["files"], log_mb=round(info["bytes"] / 1e6, 2))
+        for safe, row in rows.items():
+            row.setdefault("has_logs", False)
+            row["running"] = self.session_is_running(row["session_id"])
+            row["timing_test"] = safe.startswith("timing-test")
+        return sorted(rows.values(), key=lambda r: str(r.get("recorded") or r["session_id"]), reverse=True)
+
+    def delete_session(self, session_id, remote=False, purge_remote=True):
+        if self.session_is_running(session_id):
+            return {"ok": False, "error": "This session is still running. End it first.", "status": 409}
+        with self.storage_lock, self.build_lock:
+            self.release_session(session_id)
+            report = store.delete_session(session_id, log_dir=LOG_DIR, remote=remote, purge_remote=purge_remote)
+        self.datasets.pop(session_id, None)
+        self.sessions_seen.pop(session_id, None)
+        return report
 
     # ---- dataset (pipeline/build_session.py) ----
     def build_dataset(self, session_id, session=None, trials=None):
@@ -231,26 +283,72 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(self.state.datasets.get(q.get("session_id", [""])[0]) or {"ok": None})
         if path == "/api/eeg/session.csv":
             return self.send_session_eeg(q.get("session_id", [""])[0])
+        if path == "/api/sessions":
+            return self.send_json({"data_root": store.display_path(store.data_root()), "sessions": self.state.inventory()})
+        if path == "/api/storage":
+            return self.send_json(self.storage_info(check=q.get("check", ["0"])[0] == "1"))
         return super().do_GET()
+
+    def storage_info(self, check=False):
+        rows = store.scan_local()
+        info = {"data_root": store.display_path(store.data_root()), "hf": store.hf_status(check=check),
+                "local_sessions": sum(not r["simulated"] for r in rows), "simulated_sessions": sum(r["simulated"] for r in rows),
+                "size_mb": round(sum(r["size_mb"] or 0 for r in rows), 1), "pending_upload": store.pending_uploads()}
+        if info["hf"].get("remote_sessions") is not None:
+            local = {store.safe_id(r["session_id"]) for r in rows}
+            info["remote_only"] = [x for x in info["hf"]["remote_sessions"] if x not in local]
+        return info
+
+    def same_origin(self):
+        """Refuse cross-site POSTs (a random web page must not be able to delete or upload sessions)."""
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        host = self.headers.get("Host", "")
+        return urlparse(origin).netloc == host
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if not self.same_origin():
+            return self.send_json({"ok": False, "error": "cross-site request refused"}, 403)
         try:
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n).decode() or "{}") if n else {}
         except ValueError:
             return self.send_json({"ok": False, "error": "bad JSON"}, 400)
         sid = body.get("session_id")
-        if path == "/api/dataset/build" and sid:
-            return self.send_json(self.state.build_dataset(sid, body.get("session"), body.get("trials")))
-        if path == "/api/dataset/push" and sid:
-            r = self.state.datasets.get(sid)
-            if not r or not r.get("ok"):
-                r = self.state.build_dataset(sid, body.get("session"), body.get("trials"))
-            if not r.get("ok"):
-                return self.send_json(r)
-            ok, log = build_session.git_publish(r)
-            return self.send_json({"ok": ok, "log": log, "relative_path": r.get("relative_path")})
+        state = self.state
+        try:
+            if path == "/api/dataset/build" and sid:
+                return self.send_json(state.build_dataset(sid, body.get("session"), body.get("trials")))
+            if path == "/api/dataset/push" and sid:
+                r = state.datasets.get(sid)
+                if not r or not r.get("ok"):
+                    r = state.build_dataset(sid, body.get("session"), body.get("trials"))
+                if not r.get("ok"):
+                    return self.send_json(r)
+                with state.storage_lock:
+                    up = store.push_session(sid, allow_simulated=bool(body.get("allow_simulated")))
+                return self.send_json({"ok": True, "url": up["url"], "path_in_repo": up["path_in_repo"], "relative_path": r.get("relative_path")})
+            if path == "/api/session/delete" and sid:
+                rep = state.delete_session(sid, remote=bool(body.get("remote")), purge_remote=body.get("purge_remote", True))
+                return self.send_json(rep, rep.pop("status", 200))
+            if path == "/api/session/bucket" and sid:
+                with state.storage_lock:
+                    return self.send_json({"ok": True, "bucket": store.set_bucket(sid, body.get("bucket", ""))})
+            if path == "/api/storage/push-pending":
+                with state.storage_lock:
+                    res = store.push_pending()
+                return self.send_json({"ok": all(x["ok"] for x in res), "results": res})
+            if path == "/api/storage/pull":
+                with state.storage_lock:
+                    res = store.pull(body.get("sessions") or None, profile=body.get("profile", "epochs"))
+                return self.send_json({"ok": True, **res})
+            if path == "/api/storage/init":
+                with state.storage_lock:
+                    return self.send_json({"ok": True, **store.init_remote()})
+        except store.StorageError as exc:
+            return self.send_json({"ok": False, "error": str(exc)})
         return self.send_json({"ok": False, "error": "unknown endpoint"}, 404)
 
     def send_json(self, obj, code=200):

@@ -2,11 +2,13 @@
 import { BridgeClient } from './bridgeClient.js';
 import { MarkerBus } from './markers.js';
 import { renderSetup } from './views/setup.js';
+import { renderExperiment } from './views/experiment.js';
+import { renderTiming } from './views/timing.js';
 import { renderRun } from './views/run.js';
 import { renderReview } from './views/review.js';
 import { renderSummary } from './views/summary.js';
 import { renderSessions } from './views/sessions.js';
-import { renderBrain } from './views/brain.js';
+import { renderEeg } from './views/eeg.js';
 import { h } from './util.js';
 
 const bridge = new BridgeClient();
@@ -52,12 +54,17 @@ async function route() {
   view.replaceChildren();
   const [, name, arg] = hash.split('/');
   document.body.dataset.route = name || 'setup';
+  // sessions, run, review and summary are all part of the Experiment tab
+  const section = { brain: 'eeg', sessions: 'experiment', run: 'experiment', review: 'experiment', summary: 'experiment' }[name] || name || 'setup';
+  document.querySelectorAll('#topbar nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === section));
   try {
     if (name === 'run') cleanup = renderRun(view, app);
     else if (name === 'review') await renderReview(view, app, decodeURIComponent(arg));
     else if (name === 'summary') await renderSummary(view, app, decodeURIComponent(arg));
     else if (name === 'sessions') await renderSessions(view, app);
-    else if (name === 'brain') cleanup = renderBrain(view, app);
+    else if (name === 'eeg' || name === 'brain') cleanup = renderEeg(view, app);
+    else if (name === 'timing') cleanup = renderTiming(view, app);
+    else if (name === 'experiment') cleanup = await renderExperiment(view, app);
     else cleanup = await renderSetup(view, app);
   } catch (e) {
     console.error(e);

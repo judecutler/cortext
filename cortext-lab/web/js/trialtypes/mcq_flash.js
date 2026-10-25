@@ -30,7 +30,7 @@ export const mcqFlash = {
       // ---- 2. flash ----
       const plan = makeFlashPlan({
         optionIds: trial.options.map((o) => o.id), repeats: s.repeats, onMs: s.on_ms,
-        offMinMs: s.off_min_ms, offMaxMs: s.off_max_ms, rng: ctx.rng,
+        offMinMs: s.off_min_ms, offMaxMs: s.off_max_ms, rng: ctx.rng, fixedOrder: !!trial.fixed_order,
       });
       trial.status = 'flashing';
       ctx.setPhase('flash');

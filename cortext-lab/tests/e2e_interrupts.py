@@ -10,7 +10,7 @@ import urllib.request
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from pw_helpers import set_num  # noqa: E402
+from pw_helpers import set_num, set_participant  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 8900 + os.getpid() % 90
@@ -43,9 +43,8 @@ def main():
             page = browser.new_page(viewport={"width": 1400, "height": 850})
             errs = []
             page.on("pageerror", lambda e: errs.append(str(e)))
-            page.goto(BASE + "/")
+            set_participant(page, BASE, "INT")
             page.wait_for_selector("text=12 items in 3 categories")
-            page.fill("input[placeholder='e.g. P01']", "INT")
             for label, val in {"Questions": "2", "Options per question": "4", "Repeats per option": "6", "Flash on (ms)": "300",
                                "Gap min (ms)": "100", "Gap max (ms)": "150", "Prompt shown first (ms)": "300"}.items():
                 set_num(page, label, val)

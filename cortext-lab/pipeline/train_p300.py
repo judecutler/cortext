@@ -10,7 +10,8 @@ It rebuilds features exactly the way the bridge computes them live (causal 0.5-2
   * grouped cross-validation by trial (no trial is ever in train and test), epoch AUC + answer accuracy per trial
   * shuffled-label control (should sit at AUC 0.5 / chance accuracy; if it doesn't, something leaks)
   * leave-one-session-out when there are 2+ sessions (the number that matters for a new session)
-Uses the cleaned dataset only for validity/artifact flags. Your own models can use datasets/cortext-p300 directly.
+Uses the cleaned dataset only for validity/artifact flags. Needs the raw recordings, so download sessions with
+`python datasets/cortext-p300/cortext_store.py pull --all` first. Your own models can use datasets/cortext-p300/cortext_data.py directly.
 """
 import argparse
 import os
@@ -20,8 +21,10 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "bridge"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "datasets", "cortext-p300"))
 import p300 as P  # noqa: E402
 from build_session import dataset_root  # noqa: E402
+from cortext_data import list_sessions  # noqa: E402
 
 
 def live_features(root, session_folder):
@@ -80,20 +83,26 @@ def cross_val(X, y, groups, options, labels, folds=5, rng=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--root", default=None, help="dataset folder (default datasets/cortext-p300)")
+    ap.add_argument("--root", default=None, help="dataset folder (default data/cortext-p300)")
     ap.add_argument("--sessions", nargs="*", default=None)
     ap.add_argument("--include-simulated", action="store_true")
     ap.add_argument("-o", "--out", default="p300_model.npz")
     a = ap.parse_args()
     root = a.root or dataset_root()
-    sys.path.insert(0, root)
-    from cortext_data import list_sessions  # noqa: E402
 
     rows = list_sessions(root, a.include_simulated)
     if a.sessions:
         rows = [r for r in rows if r["session_id"] in a.sessions]
     if not rows:
-        sys.exit(f"no sessions in {root} (pass --include-simulated to use simulated ones)")
+        sys.exit(f"no sessions in {root}. Download them: python datasets/cortext-p300/cortext_store.py pull --all "
+                 "(or pass --include-simulated to use simulated ones)")
+    no_raw = [r["session_id"] for r in rows if not r["complete"]]
+    if no_raw:
+        print(f"skipping {len(no_raw)} session(s) downloaded without raw EEG ({', '.join(no_raw)}); "
+              "run `cortext_store.py pull --all` to include them")
+        rows = [r for r in rows if r["complete"]]
+        if not rows:
+            sys.exit("no session with raw EEG on this machine")
     parts, labels = [], None
     for r in rows:
         X, y, g, o, ok, lab, sid = live_features(root, r["folder"])

@@ -1,10 +1,10 @@
-// Neural monitor: full-screen live view of the headset for the audience (open it on a second screen / window).
+// EEG tab (the neural monitor): live view of the headset for the audience (open it on a second screen / window).
 // Never shown to the participant during flashing: moving visuals in their field of view would add their own brain
 // responses to the recording.
 import { h, fmt } from '../util.js';
 import { HeadMap, Traces, ErpPlot, EEGFeed, evidenceBars, mapValues, regionBands, BAND_INFO } from '../brainviz.js';
 
-export function renderBrain(root, app) {
+export function renderEeg(root, app) {
   let mode = localStorage.getItem('cortext-lab.mapmode') || 'alpha';
   const status = h('span', { class: 'live-pill' }, 'connecting…');
   const meta = h('div', { class: 'muted mono' });
@@ -23,7 +23,9 @@ export function renderBrain(root, app) {
   root.append(h('div', { class: 'monitor' },
     h('div', { class: 'mon-head' },
       h('div', {}, h('div', { class: 'eyebrow' }, 'CorText · live'), h('h1', { class: 'glow' }, 'Neural activity monitor')),
-      h('div', { class: 'mon-status' }, status, meta)),
+      h('div', { class: 'mon-status' }, status, meta,
+        h('button', { class: 'btn small', type: 'button', title: 'Open the monitor in its own window for a second screen',
+          onclick: () => window.open(location.pathname + '#/eeg', 'cortext-monitor', 'popup,width=1400,height=900') }, 'Open in its own window ↗'))),
     h('div', { class: 'mon-grid' },
       h('section', { class: 'panel map-panel' }, h('div', { class: 'panel-title' }, 'Scalp map', h('span', { class: 'muted small' }, '8 electrodes, interpolated · top view, nose up')),
         tabs, mapCanvas, legend, hint, quality),

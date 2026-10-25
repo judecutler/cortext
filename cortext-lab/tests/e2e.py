@@ -17,7 +17,7 @@ import urllib.request
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from pw_helpers import set_num, set_select  # noqa: E402
+from pw_helpers import set_num, set_select, set_participant  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 8300 + os.getpid() % 500
@@ -50,12 +50,10 @@ def main():
             page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
             page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" and "ERR_TUNNEL" not in m.text and "ERR_NAME" not in m.text else None)
 
-            page.goto(BASE + "/")
-            page.wait_for_selector("text=New session")
+            set_participant(page, BASE, "E2E")
             page.wait_for_selector("text=12 items in 3 categories")
-            page.screenshot(path=os.path.join(SHOTS, "01_setup.png"))
+            page.screenshot(path=os.path.join(SHOTS, "01_experiment.png"))
             # small, fast session
-            page.fill("input[placeholder='e.g. P01']", "E2E")
             for label, val in {"Questions": "3", "Repeats per option": "2", "Flash on (ms)": "200", "Gap min (ms)": "100",
                                "Gap max (ms)": "150", "Prompt shown first (ms)": "400"}.items():
                 set_num(page, label, val)
@@ -198,7 +196,7 @@ def main():
             # ---- timing test page ----
             tp = ctx.new_page()
             tp.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
-            tp.goto(BASE + "/timing.html")
+            tp.goto(BASE + "/#/timing")
             tp.wait_for_selector("#conn .dot.green")
             tp.fill("#interval", "300"); tp.fill("#ondur", "100"); tp.fill("#count", "20")
             tp.click("#go")
@@ -216,7 +214,7 @@ def main():
 
             # ---- demo mode ----
             page.goto(BASE + "/#/setup")
-            page.wait_for_selector("text=New session")
+            page.wait_for_selector("h1:text-is('Setup')")
             page.keyboard.press("m")
             assert page.evaluate("document.body.dataset.mode") == "demo"
             page.screenshot(path=os.path.join(SHOTS, "09_demo_setup.png"))

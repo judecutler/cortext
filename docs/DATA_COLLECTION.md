@@ -1,6 +1,6 @@
 # Collecting EEG data with CorText (start here)
 
-Headset → website → cleaned dataset on GitHub → teammates train. Three terminals, one browser tab.
+Headset → website → cleaned dataset in a private Hugging Face repo → teammates train. Three terminals, one browser tab.
 
 ## 0. One-time install (in the VS Code terminal, repo folder)
 
@@ -8,11 +8,12 @@ Headset → website → cleaned dataset on GitHub → teammates train. Three ter
 pip install "gpype[lsl]" pylsl numpy scipy
 ```
 
-(`gpype` is what `bci.py` already uses. If `bci.py` runs, you only need `pip install pylsl` on top.)
+(`gpype` is what `cortext-lab/eeg/bci.py` already uses. If that runs, you only need `pip install pylsl` on top.)
+One-time storage setup (Hugging Face account, token, repo): [`DATA_STORAGE.md`](DATA_STORAGE.md).
 
 ## 1. Every recording
 
-Close `bci.py` first: only one program can hold the Bluetooth headset at a time.
+Close `bci.py` (`cortext-lab/eeg/bci.py`) first: only one program can hold the Bluetooth headset at a time.
 
 | Terminal | Command | What it does |
 |---|---|---|
@@ -24,19 +25,20 @@ No headset? Run `python cortext-lab/eeg/fake_eeg.py` instead of terminal 1. It s
 
 ## 2. In the website
 
-1. **Setup page → Headset card.** It should show the headset, 8 electrode chips and live traces. It auto-fills *Device* and sets *Predictor = Live EEG*.
+1. **Setup tab → Headset card.** It should show the headset, 8 electrode chips and live traces. It auto-fills *Device* and sets *Predictor = Live EEG*.
    - Fix any electrode marked **noisy** or **flat** before you start: add gel, press it on, ask the participant to relax their jaw and sit still.
    - Healthy is about 5–40 µV.
    - Your first screenshot (traces clipping past ±50 µV) would show most chips as noisy.
-2. Optional: click **Open neural monitor ↗** and put it on a second screen for the audience. Never show it to the participant during flashing.
-3. Enter a **Participant ID**. Use a code like P01, never a real name, because this ends up on GitHub. Then click **Start session**.
-4. When the session ends, open **Session summary**. The *Training dataset* card cleans the EEG and shows a quality report. **Publish to GitHub** commits and pushes only that session's folder.
-5. If you mark trials invalid later on the Review page, the dataset is rebuilt automatically. Press Publish again to share the update.
+2. Optional: open the **EEG** tab (button *Open in its own window*) and put it on a second screen for the audience. Never show it to the participant during flashing.
+3. Enter a **Participant ID**. Use a code like P01, never a real name, because this ends up in the shared dataset. Then open the **Experiment** tab, choose your settings (or a preset) and click **Start session**.
+4. When the session ends, open **Session summary**. The *Training dataset* card cleans the EEG and shows a quality report. **Upload to Hugging Face** sends only that session's folder (or tick *Upload automatically* on the Setup tab).
+5. If you mark trials invalid later on the Review page, the dataset is rebuilt automatically. Upload again to share the update.
 
 ## 3. For teammates training models
 
 ```bash
-git pull
+python datasets/cortext-p300/cortext_store.py pull            # small epochs files only
+python datasets/cortext-p300/cortext_store.py pull --all      # also the raw + cleaned EEG
 ```
 
 ```python
@@ -49,6 +51,7 @@ X, y, info = load_epochs()     # X: (epochs, 8 channels, 250 samples) µV, y: 1 
 Then:
 - Train the live scorer and check it with honest controls: `python cortext-lab/pipeline/train_p300.py`
 - Use the trained model live: `python cortext-lab/bridge/bridge.py --p300-model p300_model.npz`
+- Organise sessions with *buckets* (a label such as `pilot` or `final`) on the Experiment → Recorded sessions page, then `load_epochs(bucket="final")`.
 
 ## 4. How the automatic cleaning works
 
@@ -72,4 +75,4 @@ What this cleaning does **not** do:
 
 The **live** scorer uses a separate, causal 0.5–20 Hz filter. A live system can't look into the future, and `train_p300.py` reproduces those live features exactly.
 
-Simulated sessions go to `datasets/cortext-p300/simulated/` and `load_epochs()` skips them unless `include_simulated=True`.
+Simulated sessions go to `data/cortext-p300/simulated/` and `load_epochs()` skips them unless `include_simulated=True`.

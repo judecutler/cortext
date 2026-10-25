@@ -83,6 +83,14 @@ class EEGEngine:
                 self._open_csv()
             return self.csv_path
 
+    def stop_session(self, session_id):
+        """Stop recording this session (if it is the active one) and close its file, so the files can be deleted."""
+        with self.lock:
+            if self.session_id == session_id:
+                self._close_csv()
+                self.session_id = None
+            self.csv_paths.pop(session_id, None)
+
     def _open_csv(self):
         os.makedirs(self.log_dir, exist_ok=True)
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(self.session_id))

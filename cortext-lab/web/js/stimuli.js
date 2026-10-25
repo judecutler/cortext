@@ -82,3 +82,36 @@ export function buildTrialSpecs(cfg, opts = {}) {
   }
   return specs.map((s, i) => ({ ...s, trial_index: i }));
 }
+
+// ---------- custom question lists (presets) ----------
+// A plan is [{ prompt, target, options: [ids in display order] }]. It is plain data, so it can be saved in a preset.
+
+/** Fisher-Yates on a copy, so randomising never changes the original list. */
+export const shuffled = (arr, rng = Math.random) => shuffle(arr, rng);
+
+/** Generate a plan from the stimulus set (same rules as the automatic questions), options listed target-first-shuffled. */
+export function generatePlan(cfg, { n, optionsPerTrial = 4, seed = (Math.random() * 2 ** 31) >>> 0, categories } = {}) {
+  const rng = mulberry32(seed);
+  return buildTrialSpecs(cfg, { n, seed, optionsPerTrial, categories }).map((s) => ({ prompt: s.prompt, target: s.target_id, options: shuffle(s.option_ids, rng) }));
+}
+
+/** Apply a wording template such as "Which one is the {label}?" to every question ({label} {text} {category} {id}). */
+export function rephrase(cfg, plan, template) {
+  const byId = cfg.byId || Object.fromEntries(cfg.items.map((i) => [i.id, i]));
+  return plan.map((q) => ({ ...q, prompt: fillPrompt(template, { ...byId[q.target], id: q.target }) }));
+}
+
+/** Turn a plan into the trial specs the runner uses. Throws a readable error if the plan does not fit the stimulus set. */
+export function specsFromPlan(cfg, plan, { trialType = 'mcq_flash', tileContent = 'image_text', fixedOrder = false } = {}) {
+  const byId = cfg.byId || Object.fromEntries(cfg.items.map((i) => [i.id, i]));
+  const bad = new Set();
+  plan.forEach((q, i) => {
+    for (const id of [q.target, ...q.options]) if (!byId[id]) bad.add(id);
+    if (!q.options.includes(q.target)) throw new Error(`Question ${i + 1}: the answer “${q.target}” is not among its images.`);
+    if (q.options.length < 2) throw new Error(`Question ${i + 1} needs at least 2 images.`);
+    if (new Set(q.options).size !== q.options.length) throw new Error(`Question ${i + 1} lists the same image twice.`);
+  });
+  if (bad.size) throw new Error(`The question list uses items that are not in the chosen stimulus set: ${[...bad].join(', ')}. Pick the stimulus set this list was made for.`);
+  return plan.map((q, i) => ({ type: trialType, target_id: q.target, option_ids: q.options.slice(), tile_content: tileContent, prompt: q.prompt || 'Which one is correct?',
+    fixed_order: fixedOrder, trial_index: i }));
+}

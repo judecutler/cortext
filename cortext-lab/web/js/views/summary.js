@@ -2,6 +2,8 @@ import { h, fmt } from '../util.js';
 import { loadSession, exportSessionZip, exportSingleFile } from '../exporter.js';
 import { summarizeTrials, flashCounts } from '../trial.js';
 import { buildDataset, pushDataset } from '../dataset.js';
+import { deleteSessionsFlow } from '../sessionActions.js';
+import { toast } from '../ui.js';
 
 const pc = (x) => (x == null ? '–' : (100 * x).toFixed(0) + '%');
 
@@ -16,11 +18,11 @@ export async function renderSummary(root, app, sessionId) {
 
   const dsBody = h('div', {}, h('span', { class: 'muted' }, 'Cleaning the EEG and building the dataset entry…'));
   const dsLog = h('pre', { class: 'mono gitlog', style: { display: 'none' } });
-  const pushBtn = h('button', { class: 'btn primary', disabled: true, onclick: doPush }, 'Publish to GitHub');
+  const pushBtn = h('button', { class: 'btn primary', disabled: true, onclick: doPush }, 'Upload to Hugging Face');
   const rebuildBtn = h('button', { class: 'btn', onclick: doBuild }, 'Rebuild');
   const dsCard = h('div', { class: 'card dataset-card' },
     h('h2', {}, 'Training dataset'),
-    h('p', { class: 'muted small' }, 'The EEG of this session is cleaned automatically (drift + mains removal, 0.5–40 Hz, bad-electrode repair, artifact flags), cut into epochs on every flash and saved to datasets/cortext-p300/ in the repo. "Publish" commits and pushes only that folder so teammates can git pull and train.'),
+    h('p', { class: 'muted small' }, 'The EEG of this session is cleaned automatically (drift + mains removal, 0.5–40 Hz, bad-electrode repair, artifact flags), cut into epochs on every flash and saved to data/cortext-p300/ on this computer. "Upload" sends that folder to the private Hugging Face dataset so teammates can download it and train (set up under Setup → Data storage).'),
     dsBody, h('div', { style: { marginTop: '10px', display: 'flex', gap: '8px' } }, pushBtn, rebuildBtn), dsLog);
 
   function showDs(r) {
@@ -40,17 +42,20 @@ export async function renderSummary(root, app, sessionId) {
       h('ul', { class: q.verdict.ok ? 'good' : 'warn' }, ...q.verdict.messages.map((m) => h('li', {}, m))));
     pushBtn.disabled = false;
   }
+  let autoDone = false;
   async function doBuild() {
     dsBody.replaceChildren(h('span', { class: 'muted' }, 'Cleaning the EEG and building the dataset entry…'));
-    try { showDs(await buildDataset(sessionId)); } catch (e) { showDs({ ok: false, error: e.message }); }
+    let r;
+    try { r = await buildDataset(sessionId); showDs(r); } catch (e) { showDs({ ok: false, error: e.message }); return; }
+    if (r?.ok && !r.simulated && !autoDone && localStorage.getItem('cortext-lab.autoupload') === '1') { autoDone = true; doPush(); }
   }
   async function doPush() {
-    pushBtn.disabled = true; pushBtn.textContent = 'Publishing…';
+    pushBtn.disabled = true; pushBtn.textContent = 'Uploading…';
     try {
       const r = await pushDataset(sessionId);
-      dsLog.style.display = ''; dsLog.textContent = (r.ok ? '✓ Published. Teammates: git pull\n\n' : '✗ Not published\n\n') + (r.log || r.error || '');
+      dsLog.style.display = ''; dsLog.textContent = r.ok ? `✓ Uploaded to Hugging Face.\n${r.url}\nTeammates: python datasets/cortext-p300/cortext_store.py pull` : `✗ Not uploaded\n\n${r.error || ''}`;
     } catch (e) { dsLog.style.display = ''; dsLog.textContent = '✗ ' + e.message; }
-    pushBtn.disabled = false; pushBtn.textContent = 'Publish to GitHub';
+    pushBtn.disabled = false; pushBtn.textContent = 'Upload to Hugging Face';
   }
   doBuild();
 
@@ -75,7 +80,8 @@ export async function renderSummary(root, app, sessionId) {
     h('div', {},
       h('button', { class: 'btn primary', onclick: () => exportSessionZip(sessionId) }, 'Export session (zip)'), ' ',
       ['session.json', 'trials.csv', 'markers.csv', 'model_feedback.csv'].map((f) => [h('button', { class: 'btn', onclick: () => exportSingleFile(sessionId, f) }, f), ' ']),
-      h('a', { class: 'btn', href: `#/review/${sessionId}` }, 'Review / clean trials')),
+      h('a', { class: 'btn', href: `#/review/${sessionId}` }, 'Review / clean trials'), ' ',
+      h('button', { class: 'btn danger', onclick: async () => { if ((await deleteSessionsFlow(app, [sessionId])).length) location.hash = '#/sessions'; } }, 'Delete session…')),
     h('div', { class: 'card', style: { marginTop: '14px' } }, h('h2', {}, 'Trials'),
       h('table', {}, h('thead', {}, h('tr', {}, ...['id', 'q', 'prompt', 'true', 'clicked', 'ok', 'RT ms', 'valid', 'reason'].map((c) => h('th', {}, c)))),
         h('tbody', {}, ...trials.map((t) => h('tr', { class: t.valid ? '' : 'invalid' },

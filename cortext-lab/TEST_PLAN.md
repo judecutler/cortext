@@ -9,12 +9,17 @@ python tests/test_bridge_lsl.py       # needs pylsl: marker arrives on a real LS
 python tests/e2e.py                   # needs playwright + chromium: full session in headless Chrome (screenshots in tests/screenshots/)
 python tests/e2e_interrupts.py        # pause mid-flash, hidden tab, bridge killed + restarted mid-session, reload keeps data
 python tests/e2e_sequential.py        # upload (folder, config+images, warnings, persistence) + one-at-a-time mode + model_feedback.csv
+python tests/test_store.py            # storage layer against a FAKE Hugging Face API: push, pull, buckets, local + remote delete, migrate
+python tests/e2e_sessions.py          # sessions page: badges, buckets, real deletion (needs an empty bridge/logs/), refuses running sessions, CSRF guard
+python tests/e2e_presets.py           # question list, shuffle buttons, presets save/load/export/import, running from a list
+python tests/e2e_panel.py             # run view: Hide/Show panel button and the I key
+python tests/e2e_eeg.py               # simulated headset -> bridge -> dataset folder (occasionally flaky on the P300 amplitude check; rerun)
 ```
 
 What they establish: each option flashes exactly `repeats` times and never twice in a row; flash onsets stay within
 one frame of schedule on a simulated display and the highlight is always off after an abort; every `flash_on` marker
 carries session/trial/option/category/is_target/repeat and reaches IndexedDB, the bridge CSV and (with pylsl) LSL
-with no sequence gaps; discard/redo/early-click/export/review behave and never delete data; the timing page runs.
+with no sequence gaps; discard/redo/early-click/export/review behave and never delete data unless you confirm a delete; the Timing tab runs.
 
 ## B. Manual, before the first real session (about 10 minutes)
 
@@ -27,7 +32,7 @@ with no sequence gaps; discard/redo/early-click/export/review behave and never d
 5. Trial 2: press `R` during flashing → flashing stops, same question comes back as a retry (dev list shows `redo`).
 6. Switch browser tab mid-flash → trial aborts as `tab_hidden`; return, press `Space` to resume.
 7. `P` mid-trial → aborted and re-queued; overlay "Paused"; `P` resumes.
-8. Press `M`: Demo mode hides the dev panel and enlarges the readout; `M` again restores it.
+8. Press `I`: the info panel hides (nav stays) and `I` brings it back. Press `M`: Demo mode hides the dev panel and enlarges the readout; `M` again restores it.
 9. Kill the bridge mid-session: indicator turns red, session continues; markers get `bridge_sent=false`; restart the
    bridge and confirm the page reconnects. Close and reopen the tab: Sessions page still lists everything.
 10. Finish. Summary: counts, click accuracy, discard rate. Review: mark a trial invalid, restore it. Export zip; open

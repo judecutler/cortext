@@ -290,3 +290,42 @@ test('model feedback rows: one per option, probabilities next to truth/click, an
   assert.deepEqual(feedbackRows([{ ...t, prediction: null }]), [], 'no model output, no feedback rows');
   const row = trialRow(t); assert.equal(row.model_shown_before_click, true);
 });
+
+// ---------- presets: custom question lists, fixed order, randomising ----------
+import { generatePlan, rephrase, specsFromPlan } from '../web/js/stimuli.js';
+
+const pcfg = (() => {
+  const items = ['dog', 'cat', 'cup', 'house', 'circle', 'square'].map((id) => ({ id, label: id, category: id.length === 3 ? 'a' : 'b', text: id }));
+  return { items, byId: Object.fromEntries(items.map((i) => [i.id, i])), defaults: {} };
+})();
+
+test('fixedOrder flash plans repeat the listed order exactly; random ones do not', () => {
+  const ids = ['a', 'b', 'c', 'd'];
+  const fixed = makeFlashPlan({ optionIds: ids, repeats: 3, rng: mulberry32(1), fixedOrder: true });
+  assert.deepEqual(fixed.events.map((e) => e.option_id), [...ids, ...ids, ...ids]);
+  for (let i = 1; i < fixed.events.length; i++) assert.notEqual(fixed.events[i].option_id, fixed.events[i - 1].option_id);
+  const random = makeFlashPlan({ optionIds: ids, repeats: 6, rng: mulberry32(1) });
+  assert.notDeepEqual(random.events.map((e) => e.option_id), [...ids, ...ids, ...ids, ...ids, ...ids, ...ids]);
+});
+
+test('trial records keep the listed option order only when the spec says fixed', () => {
+  const spec = (fixed) => ({ type: 'mcq_sequential', target_id: 'cat', option_ids: ['dog', 'cat', 'cup', 'house'], tile_content: 'image_text', prompt: 'q', trial_index: 0, fixed_order: fixed });
+  const mk = (s, seed) => makeTrialRecord({ sessionId: 's', spec: s, trialId: 0, attempt: 0, rng: mulberry32(seed), settings: { ...{ seq_on_ms: 1, seq_gap_ms: 1, seq_repeats: 1, on_ms: 1, off_min_ms: 1, off_max_ms: 1, repeats: 1 } }, byId: pcfg.byId });
+  assert.deepEqual(mk(spec(true), 5).options.map((o) => o.id), ['dog', 'cat', 'cup', 'house']);
+  assert.equal(mk(spec(true), 5).fixed_order, true);
+  const orders = new Set([1, 2, 3, 4, 5, 6].map((s) => mk(spec(false), s).options.map((o) => o.id).join()));
+  assert.ok(orders.size > 1, 'random order should vary');
+});
+
+test('plans: generate, rephrase, validate, convert to specs', () => {
+  const plan = generatePlan(pcfg, { n: 6, optionsPerTrial: 3, seed: 4 });
+  assert.equal(plan.length, 6);
+  for (const q of plan) { assert.ok(q.options.includes(q.target)); assert.equal(q.options.length, 3); }
+  const re = rephrase(pcfg, plan, 'Find the {label} please');
+  assert.equal(re[0].prompt, `Find the ${plan[0].target} please`);
+  const specs = specsFromPlan(pcfg, re, { trialType: 'mcq_sequential', fixedOrder: true });
+  assert.equal(specs[2].trial_index, 2); assert.equal(specs[2].fixed_order, true); assert.deepEqual(specs[2].option_ids, plan[2].options);
+  assert.throws(() => specsFromPlan(pcfg, [{ prompt: 'x', target: 'dog', options: ['cat', 'cup'] }]), /not among its images/);
+  assert.throws(() => specsFromPlan(pcfg, [{ prompt: 'x', target: 'nope', options: ['nope', 'cup'] }]), /not in the chosen stimulus set/);
+  assert.throws(() => specsFromPlan(pcfg, [{ prompt: 'x', target: 'dog', options: ['dog', 'dog'] }]), /twice/);
+});

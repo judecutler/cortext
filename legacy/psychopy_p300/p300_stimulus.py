@@ -7,8 +7,8 @@ EPFL dataset). Flashes are locked to screen frames, and an LSL marker is sent on
 the exact frame each flash appears.
 
 Usage (run as a script, NOT inside a Jupyter notebook):
-    python p300_stimulus.py --participant P01
-    python p300_stimulus.py --participant test --choices 2 --reps 3 --windowed   # quick test
+    python legacy/psychopy_p300/p300_stimulus.py --participant P01
+    python legacy/psychopy_p300/p300_stimulus.py --participant test --choices 2 --reps 3 --windowed   # quick test
 
 Put your images in an "images" folder next to this script:
     images/pizza.png, images/rice.png, images/noodles.png, images/water.png
@@ -25,12 +25,14 @@ from datetime import datetime
 from psychopy import core, event, visual
 from pylsl import StreamInfo, StreamOutlet, local_clock
 
+HERE = os.path.dirname(os.path.abspath(__file__))   # images/ and data/ live next to this script
+
 # ----------------------------- settings -----------------------------------
 OPTIONS = [
-    ("c", "images/c.png"),
-    ("cu", "images/cu.png"),
-    ("cnd", "images/cnd.png"),
-    ("d", "images/d.png"),
+    ("c", os.path.join(HERE, "images", "c.png")),
+    ("cu", os.path.join(HERE, "images", "cu.png")),
+    ("cnd", os.path.join(HERE, "images", "cnd.png")),
+    ("d", os.path.join(HERE, "images", "d.png")),
 ]
 FLASH_S = 0.100      # how long an option is bright
 SOA_S = 0.400        # time from one flash onset to the next
@@ -215,9 +217,9 @@ try:
 except KeyboardInterrupt:
     print("Stopped early with ESC.")
 finally:
-    os.makedirs("data", exist_ok=True)
+    os.makedirs(os.path.join(HERE, "data"), exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join("data", f"{args.participant}_{stamp}_markers.csv")
+    path = os.path.join(HERE, "data", f"{args.participant}_{stamp}_markers.csv")
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["lsl_time", "marker"])
