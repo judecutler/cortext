@@ -409,7 +409,8 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json(r)
                 with state.storage_lock:
                     up = store.push_session(sid, allow_simulated=bool(body.get("allow_simulated")))
-                return self.send_json({"ok": True, "url": up["url"], "path_in_repo": up["path_in_repo"], "relative_path": r.get("relative_path")})
+                return self.send_json({"ok": True, "url": up["url"], "path_in_repo": up["path_in_repo"], "relative_path": r.get("relative_path"),
+                                       "voltages": up.get("voltages")})
             if path == "/api/session/delete" and sid:
                 rep = state.delete_session(sid, remote=bool(body.get("remote")), purge_remote=body.get("purge_remote", True))
                 return self.send_json(rep, rep.pop("status", 200))

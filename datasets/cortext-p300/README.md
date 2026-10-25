@@ -43,6 +43,10 @@ simulated/<session_id>/        fake_eeg.py runs (never mix into results)
                  rejected_artifact, clicked_option_id, onset_lsl, session_id
   events.csv     every marker (lsl_time, sample index into eeg_clean, event, trial/option fields)
   trials.csv     the app's trial table (validity after operator review, click, correct, model prediction)
+voltages/<session_id>_raw.csv.gz   plain-text copy of eeg_raw.npz for people without numpy: time_s, lsl_time, one µV column
+                                   per electrode (Fz_uV ... PO8_uV), event (markers on that sample). Uploaded with each session
+                                   ("upload_voltages" in dataset.json); for older sessions: cortext_store.py voltages;
+                                   download: cortext_store.py pull --voltages
 ```
 
 ## Cleaning (automatic)

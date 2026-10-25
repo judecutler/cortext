@@ -1,5 +1,7 @@
 {
   "name": "cortext-p300",
   "hf_repo": "judicus/cortext-1",
-  "hf_private": true
+  "hf_private": true,
+  "upload_voltages": true,
+  "voltage_signal": "raw"
 }
