@@ -6,16 +6,18 @@ import { loadSettings, patchSettings, loadParticipant, saveParticipant } from '.
 import { HeadMap, Traces, EEGFeed, mapValues } from '../brainviz.js';
 import { storageInfo, uploadPending, downloadFromHub, createHubRepo } from '../dataset.js';
 import { toast } from '../ui.js';
+import { Voice, NARRATOR_MOODS, EDGE_VOICES, browserVoices, narrationFacts, composeNarration } from '../voice.js';
 
 export async function renderSetup(root, app) {
   const s = loadSettings();
   const who = loadParticipant();
-  const persistWho = () => saveParticipant({ participant: participant.value.trim(), device: device.value, notes: notes.value });
+  const persistWho = () => saveParticipant({ participant: participant.value.trim(), device: device.value, notes: notes.value, display_name: displayName.value.trim() });
 
   // ---------- participant & recording ----------
   const participant = h('input', { type: 'text', value: who.participant, placeholder: 'e.g. P01', autocomplete: 'off', oninput: () => { persistWho(); idHint(); } });
   const device = h('select', { onchange: persistWho }, h('option', { value: '' }, '— choose —'),
     ...DEVICES.map((d) => h('option', { value: d, selected: who.device === d }, d)));
+  const displayName = h('input', { type: 'text', value: who.display_name || '', placeholder: 'e.g. Jude (optional)', autocomplete: 'off', oninput: () => persistWho() });
   const notes = h('textarea', { placeholder: 'electrode gel, impedance notes, caffeine, lighting …', oninput: persistWho }, who.notes);
   notes.value = who.notes;
   const idWarn = h('small', { class: 'warn' });
@@ -26,7 +28,9 @@ export async function renderSetup(root, app) {
   idHint();
   const row = (label, el, hint) => h('div', { class: 'field' }, h('label', {}, label), el, hint || null);
   const whoCard = h('div', { class: 'card' }, h('h2', {}, 'Participant & recording'),
-    row('Participant ID', participant, idWarn), row('Device used', device), row('Notes', notes),
+    row('Participant ID', participant, idWarn), row('Device used', device),
+    row('Name for the narrator', displayName, h('small', {}, 'Demo only: the narrator says it out loud. Kept in this browser; never written to the session, markers or dataset.')),
+    row('Notes', notes),
     h('small', { class: 'muted', style: { display: 'block' } }, 'Remembered between visits. Notes are cleared after each session starts.'));
 
   // ---------- prediction & display hardware ----------
@@ -145,6 +149,91 @@ export async function renderSetup(root, app) {
     stBody, actions, stMsg);
   loadStorage(false);
 
-  root.append(h('h1', {}, 'Setup'), h('div', { class: 'grid2' }, headsetCard, whoCard, predCard, hwCard, storeCard));
-  return () => { feed.stop(); offHs(); };
+  // ---------- voice & narrator (demo) ----------
+  const vStatus = h('div', { class: 'small muted' }, 'Checking the bridge…');
+  const vMsg = h('div', { class: 'small', style: { marginTop: '6px' } });
+  const engine = h('select', { onchange: saveVoice }, h('option', { value: 'auto', selected: s.tts_engine !== 'browser' }, 'Bridge voice if installed, else the browser’s'),
+    h('option', { value: 'browser', selected: s.tts_engine === 'browser' }, 'Browser voice only'));
+  const edgeList = h('datalist', { id: 'edgeVoices' }, ...EDGE_VOICES.map(([v, l]) => h('option', { value: v }, l)));
+  const tVoice = h('input', { type: 'text', list: 'edgeVoices', value: s.tts_voice || '', placeholder: 'default: en-US-AndrewMultilingualNeural', onchange: saveVoice });
+  const bVoice = h('select', { onchange: saveVoice }, h('option', { value: '' }, 'Best English voice found'));
+  browserVoices().then((vs) => {
+    bVoice.append(...vs.filter((v) => /^en/i.test(v.lang)).concat(vs.filter((v) => !/^en/i.test(v.lang)))
+      .map((v) => h('option', { value: v.name, selected: v.name === s.browser_voice }, `${v.name} (${v.lang})`)));
+  });
+  const rate = h('input', { type: 'number', min: 0.5, max: 2, step: 0.05, value: s.tts_rate ?? 1, onchange: saveVoice });
+  const llm = h('select', { onchange: saveVoice }, ...[['template', 'Built-in lines (offline, instant)'], ['ollama', 'Ollama (free, runs on this computer)'],
+    ['openai', 'OpenAI-compatible API (OpenAI, Groq free tier, OpenRouter, LM Studio)'], ['anthropic', 'Claude (Anthropic API)']]
+    .map(([v, l]) => h('option', { value: v, selected: s.narrator_llm === v }, l)));
+  const mood = h('select', { onchange: () => { const m = NARRATOR_MOODS.find(([id]) => id === mood.value); if (m) ctxBox.value = m[2]; saveVoice(); } },
+    ...NARRATOR_MOODS.map(([id, label]) => h('option', { value: id, selected: s.narrator_mood === id }, label)),
+    h('option', { value: 'custom', selected: s.narrator_mood === 'custom' }, 'Custom (edited below)'));
+  const moodText = (id) => (NARRATOR_MOODS.find(([m]) => m === id) || NARRATOR_MOODS[0])[2];
+  const ctxBox = h('textarea', { class: 'narr-context', oninput: () => { if (ctxBox.value.trim() !== moodText(mood.value)) mood.value = 'custom'; saveVoice(); } });
+  ctxBox.value = (s.narrator_context || '').trim() || moodText(s.narrator_mood);
+  const rulesEl = h('pre', { class: 'mono small', style: { whiteSpace: 'pre-wrap' } }, 'Loading…');
+  function saveVoice() {
+    const txt = ctxBox.value.trim();
+    patchSettings({ tts_engine: engine.value, tts_voice: tVoice.value.trim(), browser_voice: bVoice.value, tts_rate: Number(rate.value) || 1,
+      narrator_llm: llm.value, narrator_mood: mood.value,
+      // store the text only when it differs from a preset, so editing a preset later still applies
+      narrator_context: mood.value === 'custom' || txt !== moodText(mood.value) ? txt : '' });
+  }
+  const mkVoice = () => new Voice({ engine: engine.value, voice: tVoice.value.trim(), browserVoice: bVoice.value, rate: Number(rate.value) || 1 });
+  let testVoice = null;
+  const testBtn = (label, fn) => h('button', { class: 'btn small', type: 'button', onclick: async (e) => {
+    const b = e.currentTarget; b.disabled = true; testVoice?.stopAll();
+    try { await fn(); } catch (err) { vMsg.className = 'small bad'; vMsg.textContent = String(err.message || err); }
+    b.disabled = false;
+  } }, label);
+  const sayHi = testBtn('▶ Test voice', async () => {
+    testVoice = mkVoice(); testVoice.unlock();
+    vMsg.className = 'small muted'; vMsg.textContent = 'Speaking…';
+    const r = await testVoice.speak(`Hi${displayName.value.trim() ? ' ' + displayName.value.trim() : ''}. I'm the CorText narrator. Which one is the dog?`);
+    vMsg.className = `small ${r.engine ? 'good' : 'bad'}`;
+    vMsg.textContent = r.engine ? `Spoken with: ${r.engine === 'browser' ? 'browser speech' : r.engine}${testVoice.lastServerError ? ` (bridge voice failed: ${testVoice.lastServerError})` : ''}` : 'No speech available in this browser.';
+  });
+  const sayNarr = testBtn('▶ Test narrator', async () => {
+    saveVoice(); testVoice = mkVoice(); testVoice.unlock();
+    const trial = { prompt: 'Which one is the dog?', trial_index: 0, clicked_answer_id: null,
+      options: [['cat', 'A'], ['dog', 'B'], ['cup', 'C'], ['circle', 'D']].map(([id, letter]) => ({ id, letter, label: id })) };
+    const facts = narrationFacts({ trial, name: displayName.value.trim(), when: 'before_click', modality: loadSettings().stim_modality,
+      pred: { source: 'eeg', best_option_id: 'dog', probabilities: { cat: 0.12, dog: 0.78, cup: 0.06, circle: 0.04 } } });
+    vMsg.className = 'small muted'; vMsg.textContent = 'Writing the line…';
+    const n = await composeNarration(facts, { provider: llm.value, context: ctxBox.value.trim(), plain: mood.value === 'scientist' });
+    vMsg.className = `small ${n.fallback_error ? 'warn' : 'good'}`;
+    vMsg.textContent = `“${n.text}” — ${n.provider === 'template' ? 'built-in line' : `${n.provider}${n.model ? ' · ' + n.model : ''}, ${n.ms} ms`}` +
+      (n.fallback_error ? ` (LLM failed, used the built-in line: ${n.fallback_error})` : '');
+    await testVoice.speak(n.text);
+  });
+  async function loadVoiceStatus(check = false) {
+    try {
+      const v = await (await fetch(`/api/voice/status${check ? '?check=1' : ''}`)).json();
+      const L = v.llm || {};
+      const yes = (ok, txt) => `<span class="${ok ? 'good' : ok === false ? 'warn' : 'muted'}">${txt}</span>`;
+      vStatus.innerHTML = `Bridge voices: ${v.tts_engines.length ? yes(true, v.tts_engines.join(', ')) : yes(false, 'none — <code>pip install edge-tts</code> for neural voices (free), or <code>pyttsx3</code> for offline ones')}<br>` +
+        `LLMs: Ollama ${L.ollama?.configured == null ? yes(null, 'not checked') : L.ollama.configured ? yes(true, `running (${L.ollama.model})`) : yes(false, 'not running')}` +
+        `${L.ollama?.warning ? ` <span class="warn">${L.ollama.warning}</span>` : ''} · ` +
+        `OpenAI-compatible ${L.openai?.configured ? yes(true, `${L.openai.model} @ ${L.openai.base_url}`) : yes(false, 'no key')} · ` +
+        `Claude ${L.anthropic?.configured ? yes(true, L.anthropic.model) : yes(false, 'no key')}` +
+        (v.config_error ? `<br><span class="bad">${v.config_error}</span>` : '');
+      rulesEl.textContent = v.rules || '';
+    } catch { vStatus.textContent = 'The bridge is not running: only the browser voice and the built-in lines are available.'; rulesEl.textContent = '(bridge offline)'; }
+  }
+  loadVoiceStatus(true);
+  const voiceCard = h('div', { class: 'card span2' }, h('div', { class: 'card-head' }, h('h2', {}, 'Voice & narrator (demo)'),
+    h('button', { class: 'btn small', type: 'button', onclick: () => loadVoiceStatus(true) }, 'Re-check')),
+    h('p', { class: 'muted small' }, 'What is read aloud and the stimulus modality are chosen per experiment (Experiment → Voice & audio). Here: which voice speaks, and how the narrator writes its lines.'),
+    vStatus,
+    h('div', { class: 'grid2', style: { marginTop: '10px' } },
+      h('div', {}, row('Speech', engine), row('Bridge voice', tVoice, h('small', {}, 'Any edge-tts voice name; pick one from the list or type it.')), edgeList,
+        row('Browser voice', bVoice), row('Speed', rate, h('small', {}, '1 = normal.'))),
+      h('div', {}, row('Narrator writes with', llm, h('small', {}, 'Any failure or a reply over 5 s falls back to the built-in line, so the demo never stalls.')),
+        row('Mood', mood),
+        row('Narrator context', ctxBox, h('small', {}, 'The LLM’s persona and mood, plus anything about the experiment it should know (e.g. “This run uses spoken words instead of pictures”). Saved with each session’s settings. The built-in lines are warm and theatrical (plain for the Calm lab scientist mood); other moods and your own context need an LLM.')),
+        h('details', {}, h('summary', { class: 'small muted' }, 'Rules always added after the context (keeps the numbers honest)'), rulesEl))),
+    h('div', { class: 'voice-test' }, sayHi, sayNarr), vMsg);
+
+  root.append(h('h1', {}, 'Setup'), h('div', { class: 'grid2' }, headsetCard, whoCard, predCard, hwCard, voiceCard, storeCard));
+  return () => { feed.stop(); offHs(); testVoice?.stopAll(); };
 }

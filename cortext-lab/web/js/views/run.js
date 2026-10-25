@@ -5,6 +5,8 @@ import { SessionRunner } from '../session.js';
 import { flashCounts, summarizeTrials, applyValidity } from '../trial.js';
 import { INVALID_REASONS } from '../schema.js';
 import { HeadMap, EEGFeed, mapValues } from '../brainviz.js';
+import { Voice } from '../voice.js';
+import { loadParticipant } from '../settings.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const noFocus = { tabindex: '-1', onmousedown: (e) => e.preventDefault() };
@@ -15,12 +17,24 @@ export function renderRun(root, app) {
   app.pending = null;
   const { session, settings, stimuli, specs } = pending;
   const predictor = new Predictor({ mode: settings.predictor_mode, url: settings.predictor_url });
+  const modality = settings.stim_modality || 'visual';
+  const usesVoice = settings.speak_question || modality !== 'visual' || settings.narrate !== 'off';
+  const voice = usesVoice ? new Voice({ engine: settings.tts_engine, voice: settings.tts_voice, browserVoice: settings.browser_voice, rate: settings.tts_rate }) : null;
+  const displayName = loadParticipant().display_name || '';
+  if (voice) {   // warm the speech cache while the operator gets ready
+    if (settings.speak_question) voice.prefetch(specs.map((x) => x.prompt));
+    if (modality !== 'visual') voice.prefetch(stimuli.items.filter((i) => !i.audio).map((i) => i.text || i.label));
+  }
 
   // ---------- DOM ----------
   const promptEl = h('h1', { class: 'prompt' });
   const subEl = h('div', { class: 'subprompt' });
   const tilesEl = h('div', { class: 'tiles' });
   const presenterEl = h('div', { class: 'presenter' });
+  const listenEl = h('div', { class: 'listen' }, h('div', { class: 'listen-icon', 'aria-hidden': 'true' }, '🔊'), h('div', {}, 'Listen'));
+  const narrTextEl = h('div', { class: 'narr-text' });
+  const narrTagEl = h('div', { class: 'narr-tag' });
+  const narratorEl = h('div', { class: 'narrator', 'aria-live': 'polite' }, h('div', { class: 'narr-orb', 'aria-hidden': 'true' }), h('div', { class: 'narr-body' }, narrTextEl, narrTagEl));
   const mainEl = h('div', { class: 'main' }, tilesEl, presenterEl);
   const progEl = h('span');
   const phaseEl = h('span');
@@ -28,7 +42,8 @@ export function renderRun(root, app) {
   const overlayEl = h('div', { class: 'overlay' });
   const pdEl = h('div', { class: `pd ${settings.photodiode_corner}${settings.photodiode ? ' enabled' : ''}` });
   const stage = h('section', { class: `stage${settings.show_bars ? ' show-bars' : ''}`, dataset: { phase: 'idle' } },
-    h('div', { class: 'stage-top' }, progEl, phaseEl), promptEl, subEl, mainEl, postEl, overlayEl);
+    h('div', { class: 'stage-top' }, progEl, phaseEl), promptEl, subEl, mainEl, narratorEl, postEl, overlayEl);
+  stage.classList.toggle('audio-only', modality === 'audio');
 
   const devSections = {};
   const mkSec = (key, title) => { const body = h('div'); devSections[key] = body; return h('div', { class: 'card' }, h('h3', {}, title), body); };
@@ -68,7 +83,8 @@ export function renderRun(root, app) {
   const ui = {
     renderTrial(trial) {
       tilesEl.replaceChildren();
-      presenterEl.replaceChildren();
+      presenterEl.replaceChildren(listenEl);
+      narratorEl.classList.remove('show', 'thinking');
       for (const k in tileEls) { delete tileEls[k]; delete probEls[k]; delete presEls[k]; }
       layout = trial.type === 'mcq_sequential' ? 'sequential' : 'flash';
       stage.dataset.layout = layout;
@@ -101,14 +117,18 @@ export function renderRun(root, app) {
     },
     showPrompt() {
       promptEl.classList.add('show');
-      subEl.textContent = layout === 'sequential'
-        ? 'Watch each picture as it appears and notice which one answers the question. You will choose afterwards.'
-        : 'Silently focus on the answer you think is correct. Do not click until the flashing stops.';
+      subEl.textContent = modality === 'audio'
+        ? (layout === 'sequential' ? 'Listen to each option and notice which one answers the question. You will choose afterwards.'
+          : 'Look at the answer you think is correct and listen for its name. Do not click until the sounds stop.')
+        : layout === 'sequential'
+          ? 'Watch each picture as it appears and notice which one answers the question. You will choose afterwards.'
+          : 'Silently focus on the answer you think is correct. Do not click until the flashing stops.';
       subEl.classList.add('show');
       stage.dataset.phase = 'prompt';
     },
-    setFlash(id, on) {
+    setFlash(id, on, { visual = true } = {}) {
       if (on) stage.dataset.phase = 'flash';
+      if (!visual) { pdEl.classList.toggle('on', on); return; }   // audio-only: nothing changes on screen (photodiode still marks onsets)
       if (layout === 'sequential') { const p = presEls[id]; if (p) p.classList.toggle('on', on); }
       else { const t = tileEls[id]; if (t) t.classList.toggle('flash', on); }
       pdEl.classList.toggle('on', on);
@@ -163,7 +183,16 @@ export function renderRun(root, app) {
           h('button', { class: 'btn primary', ...noFocus, onclick: () => r.next() }, 'Next', h('kbd', {}, 'Space')))].filter(Boolean));
       postEl.classList.add('show');
     },
-    hidePost() { postEl.classList.remove('show'); },
+    hidePost() { postEl.classList.remove('show'); narratorEl.classList.remove('show', 'thinking'); },
+    /** The narrator's caption. text=null shows the "thinking" state while the LLM writes the line. */
+    showNarration(text, { thinking = false, simulated = false, provider = '' } = {}) {
+      narratorEl.classList.add('show');
+      narratorEl.classList.toggle('thinking', thinking);
+      narrTextEl.textContent = thinking ? 'Reading the brain signal…' : text;
+      narrTagEl.textContent = thinking ? '' : [simulated ? 'SIMULATED — not a real brain reading' : 'narrator',
+        provider && provider !== 'template' ? `written by ${provider}` : ''].filter(Boolean).join(' · ');
+      narrTagEl.classList.toggle('warn', simulated);
+    },
     updatePrediction(trial) {
       const el = postEl.querySelector('#predLine');
       if (el && runner.current === trial) el.textContent = predText(trial);
@@ -183,7 +212,7 @@ export function renderRun(root, app) {
   }
 
   // ---------- runner ----------
-  const runner = new SessionRunner({ session, settings, stimuli, specs, markers: app.markers, bridge: app.bridge, predictor, ui });
+  const runner = new SessionRunner({ session, settings, stimuli, specs, markers: app.markers, bridge: app.bridge, predictor, ui, voice, displayName });
   app.runner = runner;
 
   predictor.onLive((live) => {
@@ -237,6 +266,9 @@ export function renderRun(root, app) {
       row('LSL recorder attached', dot(b.lsl_consumers ? 'green' : 'red') + (b.lsl_consumers ? 'yes' : 'no consumer')) +
       row('EEG stream (LSL)', dot(eegOk ? 'green' : 'red') + (eeg.found ? `${esc(eeg.name)} · ${fmt(eeg.measured_srate, 0)} Hz` : 'not found')) +
       row('Predictor', dot(ps.mode === 'off' ? 'amber' : ps.connected ? 'green' : 'red') + `${esc(predictor.label)}`) +
+      (voice ? row('Voice', dot(voice.ctx?.state === 'running' ? 'green' : 'amber') +
+        `${voice.engine === 'browser' || !voice.serverTts ? 'browser speech' : 'bridge TTS'}${voice.ctx?.state !== 'running' ? ' (press Start to enable audio)' : ''}` +
+        (settings.narrate !== 'off' ? ` · narrator ${esc(settings.narrator_llm)}` : '') + (voice.lastServerError ? ` <span class="warn">${esc(voice.lastServerError)}</span>` : '')) : '') +
       row('Clock offset / RTT', `${fmt(b.offset_ms, 1)} ms / ${fmt(b.rtt_ms, 2)} ms`) +
       row('Markers sent / bridge got', `${b.sent} / ${b.markers_received ?? '–'}`);
     const trials = runner.trials;
@@ -315,7 +347,11 @@ export function renderRun(root, app) {
   const devInterval = setInterval(() => renderDev(), 1000);
 
   // ---------- keyboard ----------
+  // Browsers only allow audio after a user gesture: the Start click / Space press unlocks it.
+  const unlock = () => voice?.unlock();
+  document.addEventListener('pointerdown', unlock, true);
   function onKey(e) {
+    unlock();
     if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
     const k = e.key;
     const trial = runner.current;
@@ -343,6 +379,8 @@ export function renderRun(root, app) {
 
   return () => {
     document.removeEventListener('keydown', onKey);
+    document.removeEventListener('pointerdown', unlock, true);
+    voice?.stopAll();
     window.removeEventListener('beforeunload', onUnload);
     offRunner(); offBridge(); clearInterval(devInterval); clearTimeout(devTimer); feed.stop();
     if (runner.phase !== 'finished') runner.stop();

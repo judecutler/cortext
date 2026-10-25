@@ -76,7 +76,7 @@ def main():
             assert page.locator(".field:has(label:text-is('Use')) select").evaluate("s => s.value") == "set:pets"
             # ---- upload config + images (one image deliberately missing) ----
             page.fill("input[placeholder='name for this set (optional)']", "cfgset")
-            page.locator("input[type=file]:not([webkitdirectory])").set_input_files(
+            page.locator(".card:has(h2:text-is('Stimulus set')) input[type=file]:not([webkitdirectory])").set_input_files(
                 [os.path.join(cfg_dir, f) for f in os.listdir(cfg_dir)])
             page.wait_for_selector("text=Saved \"cfgset\"")
             warn = page.inner_text(".card:has(h2:text-is('Stimulus set'))")

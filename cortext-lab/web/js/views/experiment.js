@@ -85,6 +85,13 @@ export async function renderExperiment(root, app) {
     chk('send_feedback', 'Send answer back to model server', 'ws predictor only. After each trial the server gets the true answer, the click and the validity flag, so it can learn from them.'),
     h('small', { class: 'warn', style: { display: 'block' } },
       'Seeing the model’s probabilities can bias the click (anchoring). Every trial records exactly what was shown (model_shown_before_click), so keep those clicks out of any evaluation of the model and use them as feedback only.'));
+  const voiceCard = h('div', { class: 'card' }, h('h2', {}, 'Voice & audio'),
+    chk('speak_question', 'Read the question aloud', 'Spoken during the prompt; the stimuli start only after it has finished, so the voice never overlaps the EEG window.'),
+    sel('stim_modality', 'Stimulus modality', [['visual', 'Visual (pictures / text)'], ['audio', 'Audio: each option is spoken, nothing changes on screen'], ['audiovisual', 'Audio + visual together']],
+      'Plays the item’s own audio file if the stimulus set has one (upload dog.mp3 next to dog.png), otherwise speaks its text. Sounds are pre-loaded and start on the marker frame; each flash_on marker records the audio latency. One-at-a-time mode (1 s each) suits spoken words best.'),
+    sel('narrate', 'Narrator', [['off', 'Off'], ['after_click', 'After the answer: announces the model’s guess'], ['before_click', 'Before the answer (show mode)']],
+      'Voice, mood and LLM are set in Setup → Voice & narrator. “Before the answer” tells the participant the guess, so those clicks are flagged model_shown_before_click and must not be used to evaluate the model.'),
+    h('div', {}, h('a', { class: 'btn small', href: '#/setup' }, 'Voice & narrator settings →')));
   const respCard = h('div', { class: 'card' }, h('h2', {}, 'Response & cleaning'),
     chk('feedback', 'Show correct / incorrect', 'Shown after the click, never while stimuli are on screen.'),
     sel('post_mode', 'After each trial', [['manual', 'Wait for operator (Space = next)'], ['auto', 'Auto-advance']], 'Discard / Redo stay available while waiting.'),
@@ -235,7 +242,7 @@ export async function renderExperiment(root, app) {
   const startBtn = h('button', { class: 'btn primary', onclick: start }, 'Start session');
   const resetBtn = h('button', { class: 'btn', type: 'button', onclick: resetDefaults }, 'Reset experiment settings');
   root.append(subTabs('configure'), h('h1', {}, 'Experiment'), rig,
-    h('div', { class: 'grid2' }, presetCard, typeCard, stimCard, designCard, planCard, flashCard, seqCard, respCard),
+    h('div', { class: 'grid2' }, presetCard, typeCard, stimCard, designCard, planCard, flashCard, seqCard, voiceCard, respCard),
     h('div', { class: 'startbar' }, startBtn, resetBtn, err));
 
   function read() {
@@ -331,6 +338,7 @@ export async function renderExperiment(root, app) {
     if (cur.options_per_trial > stimuli.items.length) { err.textContent = 'More options per question than stimulus items.'; return; }
     if (cur.predictor_mode === 'eeg' && !(app.bridge.status().eeg || {}).found) { err.textContent = 'Predictor is Live EEG but no headset stream is reaching the bridge. Start eeg/stream_eeg.py, or choose Mock under Setup → Prediction.'; return; }
     if (cur.trial_type === 'mcq_sequential' && cur.show_model_probs && cur.predictor_mode === 'off') { err.textContent = 'Model probabilities need a predictor: choose Mock or WebSocket, or untick "Show model probability".'; return; }
+    if (cur.narrate !== 'off' && cur.predictor_mode === 'off') { err.textContent = 'The narrator announces the model’s guess, so it needs a predictor: choose one under Setup → Prediction, or turn the narrator off.'; return; }
     try { await db.getAll('sessions'); } catch (e) { err.textContent = 'Local storage (IndexedDB) is unavailable: ' + e.message; return; }
     saveSettings(cur);
     saveParticipant({ ...who, notes: '' });   // notes belong to one session; the participant and device carry over

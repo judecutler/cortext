@@ -3,7 +3,8 @@
 // Accepted uploads (any mix, drag-and-drop, multi-select or a whole folder):
 //   * one stimuli .json in the same format as web/config/stimuli.json  ("items" required)
 //   * image files (png/jpg/jpeg/gif/webp/svg/bmp/avif), matched to items by FILE NAME (folders are ignored)
-//   * audio files are stored for later use (not played yet)
+//   * audio files (mp3/wav/ogg/m4a...) matched to items by FILE NAME via "audio" in the config, or by item id; played as
+//     the stimulus in the audio / audio+visual modalities (otherwise the item's text is spoken)
 // If there is no .json, items are generated from the images: id/label = file name, category = parent folder name
 // (or "uncategorized" when files were not uploaded as a folder).
 import { db } from './db.js';
@@ -64,10 +65,14 @@ export async function buildSetFromFiles(fileList) {
       if (it.audio) {
         const k = findMedia(it.audio);
         if (k) it.audio = k; else { warnings.push(`Item "${it.id}": audio "${base(it.audio)}" was not uploaded.`); it.audio = null; }
+      } else {
+        const k = Object.keys(media).find((m) => isAudio(media[m]) && stem(m).toLowerCase() === String(it.id).toLowerCase());
+        if (k) it.audio = k;
       }
     });
   } else {
     const imgs = Object.keys(media).filter((k) => isImage(media[k]));
+    const auds = Object.fromEntries(Object.keys(media).filter((k) => isAudio(media[k])).map((k) => [stem(k).toLowerCase(), k]));
     if (!imgs.length) warnings.push('No .json config and no image files: nothing to build a stimulus set from.');
     const used = new Set();
     const items = imgs.map((k) => {
@@ -77,7 +82,7 @@ export async function buildSetFromFiles(fileList) {
       while (used.has(id)) id = `${slug(stem(k))}_${n++}`;
       used.add(id);
       const label = pretty(stem(k));
-      return { id, category: slug(category), label: label.toLowerCase(), text: label.charAt(0).toUpperCase() + label.slice(1), image: k };
+      return { id, category: slug(category), label: label.toLowerCase(), text: label.charAt(0).toUpperCase() + label.slice(1), image: k, audio: auds[stem(k).toLowerCase()] || null };
     });
     config = {
       version: 1, description: 'Generated from uploaded images', defaults: { options_per_trial: 4, tile_content: 'image_text', prompt: 'Which one is the {label}?', distractor_set: 'mixed' },
@@ -117,6 +122,9 @@ export function materializeSet(set) {
     it.image_file = it.image || null;
     if (it.image && set.files[it.image]) it.image = URL.createObjectURL(set.files[it.image]);
     else if (it.image) it.image = null;
+    it.audio_file = it.audio || null;
+    if (it.audio && set.files[it.audio]) it.audio = URL.createObjectURL(set.files[it.audio]);
+    else if (it.audio) it.audio = null;
   });
   cfg.byId = Object.fromEntries(cfg.items.map((i) => [i.id, i]));
   cfg.warnings = validateStimuli(cfg);
@@ -129,6 +137,6 @@ export function stimuliSnapshot(cfg) {
   return {
     source: cfg.source || { type: 'path' },
     defaults: cfg.defaults, prompts: cfg.prompts, distractor_sets: cfg.distractor_sets, trial_plan: cfg.trial_plan || null,
-    items: cfg.items.map((i) => ({ id: i.id, category: i.category, label: i.label, text: i.text, image: i.image_file ?? i.image ?? null, audio: i.audio ?? null })),
+    items: cfg.items.map((i) => ({ id: i.id, category: i.category, label: i.label, text: i.text, image: i.image_file ?? i.image ?? null, audio: i.audio_file ?? i.audio ?? null })),
   };
 }

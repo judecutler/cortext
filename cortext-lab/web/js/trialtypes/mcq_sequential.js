@@ -5,9 +5,8 @@
 //
 // Markers use the same schema as flash mode (event `flash_on` / `flash_off`, extra.mode = "sequential") so the same
 // epoching and detector code works for both modes.
-import { sleep } from '../util.js';
 import { makeFlashPlan, runFlashPlan } from '../flasher.js';
-import { optFields, responsePhase } from './common.js';
+import { optFields, responsePhase, promptPhase, stimulusOn, stimulusOff, narrateGuess } from './common.js';
 
 export const mcqSequential = {
   id: 'mcq_sequential',
@@ -29,8 +28,7 @@ export const mcqSequential = {
     try {
       // ---- 1. question alone ----
       ctx.setPhase('prompt');
-      await ctx.frame((ts) => { ui.showPrompt(); ctx.mark('prompt_on', {}, ts); });
-      await ctx.guard(sleep(s.prompt_ms));
+      await promptPhase(ctx, trial);
 
       // ---- 2. options one at a time (question stays) ----
       const plan = makeFlashPlan({
@@ -47,14 +45,14 @@ export const mcqSequential = {
         token: ctx.token,
         onOn: (ev, ts, res) => {
           const o = opt[ev.option_id];
-          ui.setFlash(ev.option_id, true);              // sequential layout: shows this option's media alone
-          const m = ctx.mark('flash_on', { ...optFields(o, ev), extra: { mode: 'sequential', on_ms: s.seq_on_ms } }, ts);
+          const extra = stimulusOn(ctx, o, ts);         // sequential layout: shows this option's media alone (and/or plays it)
+          const m = ctx.mark('flash_on', { ...optFields(o, ev), extra: { mode: 'sequential', on_ms: s.seq_on_ms, ...extra } }, ts);
           res.t_on_ms = m.t_ms; res.marker_seq = m.seq;
           trial.flash_order.push(res);
           predictor.noteFlash(m);
         },
         onOff: (ev, ts, aborted) => {
-          ui.setFlash(ev.option_id, false);
+          stimulusOff(ctx, opt[ev.option_id]);
           if (s.log_flash_off && !aborted) ctx.mark('flash_off', { ...optFields(opt[ev.option_id], ev), extra: { mode: 'sequential' } }, ts);
         },
       }));
@@ -65,13 +63,17 @@ export const mcqSequential = {
 
       // ---- 3. model scores the epochs (EEG is finished; nothing is shown yet) ----
       ui.setSub('Scoring…');
-      const pred = await ctx.guard(predictor.finishTrial());
+      const predP = predictor.finishTrial();
+      ctx.runner._predP = predP;
+      const pred = await ctx.guard(predP);
       if (pred) { trial.prediction = pred; await ctx.save(); }
+      const narrateFirst = s.narrate === 'before_click';
 
       // ---- 4. full MCQ with the model's probability on every choice, then the click ----
       const showProbs = s.show_model_probs && pred && pred.probabilities;
       await responsePhase(ctx, trial, {
-        extraCue: { model_probs_shown: !!showProbs },
+        extraCue: { model_probs_shown: !!showProbs, narrated: narrateFirst },
+        afterCue: narrateFirst ? () => narrateGuess(ctx, trial, pred, 'before_click') : null,
         onCue: () => {
           ui.revealTiles();
           if (showProbs) {
@@ -84,6 +86,10 @@ export const mcqSequential = {
               : pred.probabilities_calibrated ? 'Percentages are the model’s probability for each choice.'
                 : 'Percentages are the model’s scores run through a softmax (uncalibrated).');
           }
+          if (narrateFirst && !trial.model_display) {
+            trial.model_display = { shown_wall_ms: Date.now(), source: pred?.source ?? null, narrated: true,
+              calibrated: !!pred?.probabilities_calibrated, probabilities: pred?.probabilities || null, scores: pred?.p300 || null };
+          } else if (narrateFirst) trial.model_display.narrated = true;
         },
       });
     } finally {

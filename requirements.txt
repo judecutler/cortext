@@ -4,3 +4,6 @@ numpy
 scipy
 pylsl
 huggingface_hub     # shared dataset storage (Hugging Face)
+# optional, demo voice (cortext-lab README → Voice): edge-tts (neural voices, internet) and/or pyttsx3 (offline)
+# edge-tts
+# pyttsx3

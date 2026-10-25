@@ -12,3 +12,4 @@ datasets/cortext-p300/index.csv
 datasets/cortext-p300/sync_state.json
 legacy/psychopy_p300/data/
 cortext-lab/bridge/logs/
+cortext-lab/bridge/voice.local.json
