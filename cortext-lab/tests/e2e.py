@@ -213,8 +213,8 @@ def main():
             tp.close()
 
             # ---- demo mode ----
-            page.goto(BASE + "/#/setup")
-            page.wait_for_selector("h1:text-is('Setup')")
+            page.goto(BASE + "/#/agent")
+            page.wait_for_selector("h1:text-is('Agent')")
             page.keyboard.press("m")
             assert page.evaluate("document.body.dataset.mode") == "demo"
             page.screenshot(path=os.path.join(SHOTS, "09_demo_setup.png"))

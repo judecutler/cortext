@@ -14,8 +14,11 @@
 * EEG (see eeg_engine.py): finds the headset's LSL stream (eeg/stream_eeg.py), records it per session to
   logs/eeg_<session>.csv, reports signal quality / band power, and serves a live P300 scorer on ws://.../predict
   that the app uses when Predictor = "Live EEG".
-* Trained models (see models.py): runs the model in cortext-lab/models/active/ (or --p300-model FILE); the Setup page
+* Trained models (see models.py): runs the model in cortext-lab/models/active/ (or --p300-model FILE); the Agent page
   lists models/library/ and this laptop's calibrations and switches the running model live (/api/models*).
+* Filter chains (see filters.py): the layers between the headset and the model. Runs the chain in
+  cortext-lab/filters/active/ (or --filters FILE, else the built-in 0.5-20 Hz default); the Agent page edits, previews
+  and switches it live (/api/filters*). A model is only used while the chain it was trained with runs.
 
 Standard library only; `pip install pylsl` is optional (free, no account).
 """
@@ -36,6 +39,7 @@ import wsproto  # noqa: E402
 import eeg_engine  # noqa: E402
 import voice  # noqa: E402  (TTS + LLM narration for the demo; all optional)
 import models  # noqa: E402  (trained P300 models: models/library + models/active)
+import filters  # noqa: E402  (filter chains: filters/library + filters/active)
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "datasets", "cortext-p300"))
@@ -297,6 +301,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_tts(q)
         if path == "/api/models":
             return self.send_json(self.models_info())
+        if path == "/api/filters":
+            return self.send_json(self.filters_info())
+        if path in ("/setup", "/agent", "/experiment"):   # old bookmarks: the app routes by #hash
+            self.send_response(302)
+            self.send_header("Location", "/#" + path)
+            self.end_headers()
+            return None
         return super().do_GET()
 
     # ---- trained P300 models (Setup page: list, pick the one to run, add files) ----
@@ -307,7 +318,7 @@ class Handler(SimpleHTTPRequestHandler):
     def models_info(self):
         eng = self.state.eeg
         labels = list(eng.labels) if eng and eng.labels else None
-        info = models.listing(LOG_DIR, labels)
+        info = models.listing(LOG_DIR, labels, self._running_filter_sig())
         sc = self._scorer()
         info["running"] = sc.status() if sc else None
         info["scoring_available"] = sc is not None
@@ -318,8 +329,19 @@ class Handler(SimpleHTTPRequestHandler):
         sc = self._scorer()
         if path == "/api/models/select":
             mid = body.get("id")
+            if mid:
+                models.path_for(mid, LOG_DIR)                   # unknown id: fail before touching any filters
+            follow = None
+            if mid and body.get("follow_filters", True):
+                # a model only works with the filters it was trained with: switch to its chain first
+                d = models.describe(models.path_for(mid, LOG_DIR))
+                if d.get("filters") and d.get("filter_signature") != self._running_filter_sig():
+                    try:
+                        follow = self._apply_filters(d["filters"], f"chain of model {d['file']}")
+                    except filters.FilterError as exc:
+                        return {"ok": False, "error": f"this model's filters can't run on this headset: {exc}"}
             new = models.set_active(mid, LOG_DIR)
-            note = None
+            note = f"Filters switched to the chain this model was trained with: {'; '.join(follow['summary'])}." if follow else None
             if sc is not None:
                 try:
                     sc.set_model(new, "Setup page" if new else "none (picked on the Setup page)")
@@ -327,7 +349,8 @@ class Handler(SimpleHTTPRequestHandler):
                     return {"ok": False, "error": str(exc)}
             else:
                 note = "saved as the active model; the bridge cannot score here (needs pylsl + numpy), it will be used once it can"
-            return {"ok": True, "active": os.path.basename(new) if new else None, "note": note, **self.models_info()}
+            return {"ok": True, "active": os.path.basename(new) if new else None, "note": note,
+                    "filters_switched": bool(follow), **self.models_info()}
         if path == "/api/models/upload":
             import base64
             try:
@@ -340,6 +363,66 @@ class Handler(SimpleHTTPRequestHandler):
             eng = self.state.eeg
             mid = models.save_calibration(body.get("id"), LOG_DIR, list(eng.labels) if eng else None)
             return {"ok": True, "id": mid, **self.models_info()}
+        return None
+
+    # ---- filter chains (Agent page: see, edit, preview and switch the layers between headset and model) ----
+    def _running_filter_sig(self):
+        eng = self.state.eeg
+        if eng is not None:
+            return eng.running_signature
+        spec, _, _ = filters.active_chain()
+        return filters.signature(spec)
+
+    def _apply_filters(self, spec, source):
+        """Make `spec` the running chain: validate on the live stream, write filters/active/, switch the engine."""
+        eng = self.state.eeg
+        spec = filters.normalize(spec)
+        if eng is not None:
+            eng.set_filters(spec, source)       # raises FilterError if it can't run here; nothing changes then
+        filters.set_active(spec)
+        return {"spec": spec, "summary": filters.summary(spec)}
+
+    def filters_info(self):
+        eng = self.state.eeg
+        info = filters.listing(self._running_filter_sig())
+        info["running"] = eng.filter_status() if eng else {
+            **filters.describe(filters.active_chain()[0]), "source": "filters/active (bridge has no EEG engine: pip install pylsl)",
+            "error": None}
+        info["live"] = bool(eng and eng.info.get("found"))
+        info["labels"] = list(eng.labels) if eng and eng.labels else []
+        info["epoching"] = {"tmin_s": eeg_engine.P.TMIN, "tmax_s": eeg_engine.P.TMAX, "baseline_s": list(eeg_engine.P.BASELINE),
+                            "bin_ms": eeg_engine.P.BIN_MS, "heuristic_window_s": list(eeg_engine.P.HEURISTIC_WINDOW),
+                            "parietal": eeg_engine.P.PARIETAL} if eeg_engine.P else None
+        if build_session is not None:
+            pr = build_session.PARAMS
+            info["offline_cleaning"] = {"zero_phase": True, "bandpass_hz": pr.get("bandpass_hz"), "bandpass_order": pr.get("bandpass_order"),
+                                        "notch_q": pr.get("notch_q"), "artifact_uv": pr.get("artifact_uv"), "params": pr}
+        sc = self._scorer()
+        info["model"] = sc.status() if sc else None
+        return info
+
+    def filters_post(self, path, body):
+        if path == "/api/filters/apply":
+            r = self._apply_filters(body.get("spec"), body.get("source") or "Agent page")
+            return {"ok": True, **r, **self.filters_info()}
+        if path == "/api/filters/select":
+            r = self._apply_filters(filters.spec_for(body.get("id")), f"Agent page ({body.get('id')})")
+            return {"ok": True, **r, **self.filters_info()}
+        if path == "/api/filters/save":
+            cid = filters.save_to_library(body.get("spec"), body.get("name"), overwrite=bool(body.get("overwrite")))
+            return {"ok": True, "id": cid, **self.filters_info()}
+        if path == "/api/filters/delete":
+            spec = filters.delete_from_library(body.get("id"))
+            return {"ok": True, "deleted": spec, **self.filters_info()}
+        if path == "/api/filters/preview":
+            eng = self.state.eeg
+            if eng is None or eeg_engine.np is None:
+                return {"ok": False, "error": "the bridge cannot filter here (needs pylsl, numpy and scipy)"}
+            ts, raw, labels, srate = eng.raw_window(min(30.0, float(body.get("warm_s", 20))))
+            if ts is None or len(ts) < srate * 2:
+                return {"ok": False, "error": "no EEG yet: connect the headset (or run eeg/fake_eeg.py) to preview"}
+            return filters.preview(body.get("spec"), ts, raw, labels, srate, body.get("channel"),
+                                   show_s=min(10.0, float(body.get("seconds", 4))))
         return None
 
     def send_tts(self, q):
@@ -384,10 +467,19 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"ok": False, "error": "bad JSON"}, 400)
         sid = body.get("session_id")
         state = self.state
+        if path.startswith("/api/filters/"):
+            try:
+                r = self.filters_post(path, body)
+            except filters.FilterError as exc:
+                return self.send_json({"ok": False, "error": str(exc)})
+            except OSError as exc:
+                return self.send_json({"ok": False, "error": f"could not write the filters folder: {exc}"})
+            if r is not None:
+                return self.send_json(r)
         if path.startswith("/api/models/"):
             try:
                 r = self.models_post(path, body)
-            except models.ModelError as exc:
+            except (models.ModelError, filters.FilterError) as exc:
                 return self.send_json({"ok": False, "error": str(exc)})
             except OSError as exc:
                 return self.send_json({"ok": False, "error": f"could not write the models folder: {exc}"})
@@ -610,6 +702,9 @@ def main():
     ap.add_argument("--p300-model", default=None,
                     help="a .npz to score with (default: the file in cortext-lab/models/active/, if any). "
                          "'none' = ignore models/active/ and adapt to the session. You can also switch on the Setup page.")
+    ap.add_argument("--filters", default=None,
+                    help="a filter-chain .json to run (default: the file in cortext-lab/filters/active/, else the built-in "
+                         "0.5-20 Hz band-pass). 'default' = ignore filters/active/. You can also switch on the Agent page.")
     ap.add_argument("--scorer", choices=["auto", "model", "adaptive", "heuristic"], default="auto",
                     help="auto: trained model if given, else adapt to this session after 5 trials, else a heuristic")
     ap.add_argument("--verbose", action="store_true")
@@ -622,7 +717,14 @@ def main():
     server.daemon_threads = True
     if pylsl is not None:
         model_path, model_source, model_warn = models.resolve_startup(args.p300_model)
-        state.eeg = eeg_engine.EEGEngine(state, pylsl, args.eeg_stream, model_path, args.scorer, LOG_DIR)
+        try:
+            fspec, fsource, fwarn = filters.resolve_startup(args.filters)
+        except filters.FilterError as exc:
+            sys.exit(f"--filters: {exc}")
+        state.eeg = eeg_engine.EEGEngine(state, pylsl, args.eeg_stream, model_path, args.scorer, LOG_DIR,
+                                         filter_spec=fspec, filter_source=fsource)
+        print(f"  Filters: {fspec['name']}: {'; '.join(filters.summary(fspec))}  [{fsource}]"
+              + (f"\n  WARNING: {fwarn}" if fwarn else ""))
         if state.eeg.scorer is not None:
             state.eeg.scorer.model_source = model_source
         print(f"  P300 model: {os.path.basename(model_path) if model_path else 'none (adapts to the session after 5 trials)'}"

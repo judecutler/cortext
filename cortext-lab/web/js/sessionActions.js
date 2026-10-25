@@ -41,7 +41,7 @@ export async function deleteSessionsFlow(app, ids) {
     confirmLabel: 'Delete permanently',
     options: [{ key: 'remote', label: 'Also delete from Hugging Face', danger: true, disabled: !remoteOk,
       hint: remoteOk ? (anyUploaded ? 'Removes the folder and permanently erases its files from the repo history. Other people’s downloaded copies stay with them.' : 'These do not look uploaded from this computer; this checks the server anyway.')
-        : 'Not available: Hugging Face is not set up on this computer (see Setup → Data storage).' }],
+        : 'Not available: Hugging Face is not set up on this computer (see Experiment → Lab & data).' }],
     typeToConfirm: (o) => (o.remote || ids.length >= 3 ? 'delete' : null),
   });
   if (!res) return [];

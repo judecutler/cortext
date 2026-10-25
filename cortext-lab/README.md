@@ -43,12 +43,18 @@ See [`../docs/DATA_COLLECTION.md`](../docs/DATA_COLLECTION.md) and [`../docs/DAT
   - The scorer starts with an untrained heuristic (mean 250–450 ms amplitude over parietal channels).
   - After 5 valid trials and 30 target epochs it retrains a shrinkage-LDA on this session after each trial.
   - It never uses a trial's own labels before that trial has been predicted.
-  - A trained model replaces both: the bridge runs the file in `models/active/` at startup. **Setup → P300 model** lists
+  - A trained model replaces both: the bridge runs the file in `models/active/` at startup. **Agent → Model** lists
     the team library (`models/library/`, shared through git; `pipeline/train_p300.py` saves there) and the models
     calibrated live on this laptop, and switches the running model without a restart. `--p300-model FILE` overrides
     `models/active/`; `--p300-model none` ignores it. See [`models/README.md`](models/README.md).
+  - Before epoching, every sample goes through the running **filter chain** (`bridge/filters.py`): ordered, causal
+    layers (band-pass, high/low-pass, mains notch, re-reference). The default is the 0.5–20 Hz band-pass every model so
+    far was trained with. **Agent → System map** edits a draft chain, shows the real signal after every layer, and
+    applies it live; chains are shared through git in `filters/library/`, and the running one is kept in `filters/active/`
+    (`--filters FILE` overrides it). A model stores the chain it was trained with and only runs with that chain.
+    See [`filters/README.md`](filters/README.md).
 - At session end, `pipeline/build_session.py` cleans the EEG and writes `data/cortext-p300/sessions/<id>/`
-  (git-ignored). Upload sends only that folder to the private Hugging Face dataset (button, or automatic from the Setup tab).
+  (git-ignored). Upload sends only that folder to the private Hugging Face dataset (button, or automatic: Experiment → Lab & data).
 - The **EEG** tab (`#/eeg`) is the neural monitor: scalp map, region band power, live traces, P300 waveform and answer evidence. It is
   for the audience on a second screen, never for the participant during flashing.
 - Each browser tab keeps its own clock offset in the bridge. Opening the monitor in a second tab must not (and no longer
@@ -58,10 +64,10 @@ See [`../docs/DATA_COLLECTION.md`](../docs/DATA_COLLECTION.md) and [`../docs/DAT
 
 | Tab | What it is for |
 |---|---|
+| **Experiment** | Three sub-pages, in the order you use them: **Images & categories** (see and rearrange the stimulus set), **Configure & run**, **Recorded sessions** (buckets, filters, bulk actions and real deletion). *Configure & run* is one page in four sections: **1 Participant & headset** (headset check and electrode chips, participant ID, device, narrator name, and a summary of what the Agent will do), **2 Design** (presets, mode, stimulus set, timing, voice & audio, response), **3 Questions & image order**, **4 Lab & data** (photodiode, data storage / Hugging Face). Start sits at the bottom with readiness chips. (This replaces the old Setup tab; `#/setup` links land here.) |
+| **Agent** | Everything between the headset and the answer, as a **system map**: Input → filter layers → Epoching → Model → Output → Result, plus the offline lane (recording → dataset cleaning → training → model library). Click a block to inspect or change it: filter layers (add with +, drag to reorder, ● bypass, ✕ remove, before/after trace and spectrum), the artifact limit, the P300 model picker, the predictor (live EEG / mock / model server) and the narrator's voice and LLM. Filter edits are a draft until **Apply to live**; the **Filter library** below shares chains like models. |
 | **EEG** | Neural monitor: scalp map, band power, live traces, P300 waveform. Can open in its own window for a second screen. |
-| **Setup** | Headset check, participant ID, device, predictor, photodiode, and **data storage** (local folder, Hugging Face status, upload/download). |
 | **Timing** | The display/marker timing test, run inside the app (no new tab; it needs the same bridge connection). |
-| **Experiment** | Three sub-pages, in the order you use them: **Images & categories** (see and rearrange the stimulus set), **Configure & run** (presets, stimulus set, design and timing, question list, then Start), **Recorded sessions** (buckets, filters, bulk actions and real deletion). |
 
 ## Undo
 
@@ -108,7 +114,7 @@ part-way and starts it again from question 1 (same as Redo). The mark travels in
 
 - A **preset** is a named bundle of the experiment settings plus an optional question list. Built-in presets are provided;
   yours are saved in this browser and can be **exported/imported as a .json file** to share with teammates.
-  Setup-tab choices (headset, participant, predictor) are deliberately not part of a preset.
+  The participant, headset, storage and Agent settings (filters, model, predictor) are deliberately not part of a preset.
 - **Questions & image order** card: tick *Use this list for the session* and the app asks exactly those questions, with your
   wording and images. Edit each question's text, the correct answer and the images (◀ ▶ reorder, ✕ remove, add more).
   *Generate from stimulus set* fills the list; *Apply wording to all* uses a template such as `Which one is the {label}?`.
@@ -121,7 +127,7 @@ part-way and starts it again from question 1 (same as Redo). The mark travels in
 
 ## Presentation modes
 
-Pick one under **Setup → Presentation mode**. Both write the same marker schema and the same exports, so the same
+Pick one under **Experiment → Design → Presentation mode**. Both write the same marker schema and the same exports, so the same
 epoching/detector code works for either. "What each stimulus shows" (image / text / image + text) applies to both.
 
 | | **Flash options in place** (original) | **One at a time, then choose** (new) |
@@ -151,8 +157,8 @@ All free. Nothing needs an account unless you choose a cloud LLM.
 |---|---|---|
 | **Read the question aloud** | Experiment → Voice & audio | Spoken during the prompt. The stimuli start only after the voice has finished (+400 ms), so it never overlaps the EEG window. |
 | **Stimulus modality** | Experiment → Voice & audio | *Visual* (as before), *Audio* (each option is spoken; nothing changes on screen, the one-at-a-time view shows a static “Listen”), or *Audio + visual*. Uses the item's own audio file if the stimulus set has one (upload `dog.mp3` next to `dog.png`, or set `"audio"` in the config), otherwise speaks its text. |
-| **Narrator** | Experiment → Voice & audio (when), Setup → Voice & narrator (how) | After the EEG phase, announces the model's guess out loud with a caption: “Hmm... based on the brain patterns, I'm about 78% sure Jude saw the dog at option B.” *After the answer* (default, clean data) or *Before the answer* (show mode). |
-| **Narrator context** | Setup → Voice & narrator | Mood presets (warm, sports commentator, stage mind-reader, calm scientist, dry skeptic) and a free-text box for your own persona or experiment context. A fixed set of rules is always added after it: say the real percent and option, never claim certainty, and say “simulation” when the prediction is mock/simulated. Replies without the real percent are rejected. |
+| **Narrator** | Experiment → Voice & audio (when), Agent → Result → Voice & narrator (how) | After the EEG phase, announces the model's guess out loud with a caption: “Hmm... based on the brain patterns, I'm about 78% sure Jude saw the dog at option B.” *After the answer* (default, clean data) or *Before the answer* (show mode). |
+| **Narrator context** | Agent → Result → Voice & narrator | Mood presets (warm, sports commentator, stage mind-reader, calm scientist, dry skeptic) and a free-text box for your own persona or experiment context. A fixed set of rules is always added after it: say the real percent and option, never claim certainty, and say “simulation” when the prediction is mock/simulated. Replies without the real percent are rejected. |
 
 **Voices.** The bridge makes speech files (cached in `bridge/logs/tts_cache/`) with the first engine that works:
 
@@ -176,10 +182,10 @@ the bridge calls one of these. Keys stay in the bridge and never reach the brows
 Set them as environment variables before `python bridge/bridge.py`, or in `bridge/voice.local.json` (git-ignored):
 `{"openai_base_url": "https://api.groq.com/openai/v1", "openai_api_key": "gsk_...", "openai_model": "llama-3.1-8b-instant"}`.
 If the LLM fails or takes over 5 s, the built-in line is used, so the demo never stalls. *Test voice* / *Test narrator*
-on the Setup tab try the whole chain.
+on Agent → Result try the whole chain.
 
 **What is stored.** Each trial gets `narration` {when, text, provider, model, mood, custom_context, …}; the session's
-settings keep the narrator context used. The *Name for the narrator* (Setup) stays in the browser: it is replaced by
+settings keep the narrator context used. The *Name for the narrator* (Experiment → Participant) stays in the browser: it is replaced by
 `{name}` in the stored text and never written to the session, markers or dataset. Note that a cloud LLM does receive it.
 *Before the answer* sets `model_display.narrated` and `model_shown_before_click`, so keep those clicks out of model
 evaluation, as with displayed probabilities. With the mock predictor the narrator always says it is a simulation.
@@ -273,7 +279,7 @@ expect a constant lag of tens of ms and a jitter of about one frame. Measure the
 
 ## Stimuli
 
-**Upload (Setup → Stimulus set).** Choose files, choose a folder, or drop files on the box:
+**Upload (Experiment → Design → Stimulus set).** Choose files, choose a folder, or drop files on the box:
 
 * a stimuli `.json` (format below) plus the image files it names, matched **by file name** (folders and upper/lower case
   are ignored; an item with no `image` picks up a file named `<id>.png/.svg/...`), or
@@ -285,7 +291,7 @@ Warnings appear for missing/unused files. Uploaded sets are stored in the browse
 name gets "(2)"), reappear in the "Use" menu after a reload, and each session records which set was used plus the item list
 (file names, not temporary links) in `session.json` (`stimuli_source`, `stimuli_snapshot`). The image files themselves are not
 exported, so keep your original folder. Audio files can be uploaded and are stored on the item but are **not played yet**.
-Use "Download example config" in setup for a template.
+Use "Download example config" on the Stimulus set card for a template.
 
 The config format: `web/config/stimuli.json` lists `items` (`id, category, label, text, image`, optional `prompt`, `distractor_set`),
 `prompts` per category, `distractor_sets` (`all`, `same_category`, or explicit `members`) and an optional
@@ -295,7 +301,7 @@ scratch as SVG and released as CC0 (`web/stimuli/LICENSE.txt`).
 
 ## Prediction hook
 
-Setup → Predictor: `off`, `mock`, or `ws` (default `ws://localhost:8765`).
+Agent → Output → Predictor: `eeg` (live EEG, the default once a headset is seen), `off`, `mock`, or `ws` (default `ws://localhost:8765`).
 
 * **mock**: simulated scores so the demo works with no model. It is *given the true answer*, so it is **not
   evidence**: it is labelled `[MOCK — simulated, not evidence]` in the UI and stored with `source: "mock"`; the

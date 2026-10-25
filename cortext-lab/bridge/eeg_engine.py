@@ -3,7 +3,8 @@ power for the brain map, and scores P300 evidence for each answer option live.
 
 Data flow
   headset --(eeg/stream_eeg.py, gpype)--> LSL "CorTextEEG" --> EEGEngine (this file)
-     * ring buffer (raw + causally filtered), timestamps in the bridge's LSL clock
+     * ring buffer: raw, filtered by the running filter chain (filters.py, switchable on the Agent page), and a fixed
+       0.5-20 Hz reference copy used only for electrode quality (so quality chips mean the same whatever chain runs)
      * logs/eeg_<session>.csv  (lsl_time, page_t_ms, Fz, C3, ...)  while a session is running
      * quality + band power per channel -> /api/status, the app's setup page, dev panel and brain map
   flash markers from the app (with LSL timestamps computed by the bridge) --> P300Scorer --> /predict WebSocket
@@ -18,6 +19,8 @@ import csv
 import os
 import threading
 import time
+
+import filters as F
 
 try:
     import numpy as np
@@ -49,7 +52,8 @@ def _labels_from_info(info, n):
 
 
 class EEGEngine:
-    def __init__(self, state, pylsl, stream_name=None, model_path=None, scorer_mode="auto", log_dir="logs"):
+    def __init__(self, state, pylsl, stream_name=None, model_path=None, scorer_mode="auto", log_dir="logs",
+                 filter_spec=None, filter_source="built-in default"):
         self.state = state
         self.pylsl = pylsl
         self.stream_name = stream_name
@@ -61,7 +65,14 @@ class EEGEngine:
         self.ts = None
         self.raw = None
         self.filt = None
+        self.qfilt = None
         self.filter = None
+        self.qfilter = None
+        self.filter_spec = F.normalize(filter_spec or F.DEFAULT_SPEC)
+        self.filter_sig = F.signature(self.filter_spec)
+        self.filter_source = filter_source
+        self.filter_error = None
+        self.filter_changed_at = None
         self.session_id = None
         self.csv_file = None
         self.csv_writer = None
@@ -185,8 +196,9 @@ class EEGEngine:
         scale = 1e6 if units and all(u.lower() in ("v", "volts") for u in units) else (1e3 if units and units[0].lower() == "mv" else 1.0)
         with self.lock:
             self.labels, self.srate, self.scale = labels, full.nominal_srate() or 250.0, scale
-            self.ts = self.raw = self.filt = None
-            self.filter = P.CausalFilter(self.srate, n) if P else None
+            self.ts = self.raw = self.filt = self.qfilt = None
+            self.qfilter = P.CausalFilter(self.srate, n) if P else None
+            self.filter = self._build_chain(self.filter_spec) if P else None
             self.info = {"found": True, "name": full.name(), "type": full.type(), "channels": n, "labels": labels,
                          "nominal_srate": self.srate, "measured_srate": None, "age_ms": None, "simulated": simulated,
                          "source_id": full.source_id(), "hostname": full.hostname(),
@@ -226,15 +238,71 @@ class EEGEngine:
             x = np.asarray(chunk, float) * self.scale
             t = np.asarray(stamps, float)
             y = self.filter(x)
+            q = self.qfilter(x)
             if self.ts is None:
-                self.ts, self.raw, self.filt = t, x, y
+                self.ts, self.raw, self.filt, self.qfilt = t, x, y, q
             else:
                 self.ts = np.concatenate([self.ts, t])
                 self.raw = np.concatenate([self.raw, x])
                 self.filt = np.concatenate([self.filt, y])
+                self.qfilt = np.concatenate([self.qfilt, q])
             keep = int(RING_SECONDS * self.srate)
             if len(self.ts) > 2 * keep:
-                self.ts, self.raw, self.filt = self.ts[-keep:], self.raw[-keep:], self.filt[-keep:]
+                self.ts, self.raw, self.filt, self.qfilt = self.ts[-keep:], self.raw[-keep:], self.filt[-keep:], self.qfilt[-keep:]
+
+    # ---------- filter chain ----------
+    def _build_chain(self, spec):
+        """A Chain for the current stream. If it can't be built here (e.g. a reference channel this headset lacks),
+        fall back to the default chain and report why, so scoring never runs on half-configured filters."""
+        try:
+            ch = F.Chain(spec, self.srate, self.labels)
+            self.filter_error = None
+            return ch
+        except F.FilterError as exc:
+            self.filter_error = f"{exc}. Running the built-in default chain until this is fixed."
+            return F.Chain(F.DEFAULT_SPEC, self.srate, self.labels)
+
+    @property
+    def running_signature(self):
+        """Signature of the chain the samples are actually filtered with (the default one if the chosen chain failed)."""
+        return self.filter.signature if self.filter is not None else self.filter_sig
+
+    @property
+    def reject_uv(self):
+        return self.filter.reject_uv if self.filter is not None else self.filter_spec["reject_uv"]
+
+    def set_filters(self, spec, source="Agent page"):
+        """Switch the running chain now. The raw ring buffer is re-filtered from its start, so every epoch is cut from
+        consistently filtered data. Raises FilterError if the chain can't run on this stream (nothing changes then)."""
+        spec = F.normalize(spec)
+        with self.lock:
+            if self.labels and np is not None:
+                F.Chain(spec, self.srate, self.labels)        # validate against this headset first
+            old_sig = self.running_signature
+            self.filter_spec, self.filter_sig, self.filter_source = spec, F.signature(spec), source
+            self.filter_changed_at = time.strftime("%H:%M:%S")
+            if self.labels and np is not None:
+                self.filter = self._build_chain(spec)
+                if self.raw is not None and len(self.raw):
+                    self.filt = self.filter(self.raw)
+            changed = old_sig != self.running_signature
+        if changed and self.scorer:
+            self.scorer.on_filters_changed()
+        return spec
+
+    def raw_window(self, seconds):
+        """(ts, raw µV, labels, srate) for the last `seconds`, for the Agent page's filter preview."""
+        with self.lock:
+            if self.ts is None:
+                return None, None, list(self.labels), self.srate
+            n = int(seconds * self.srate)
+            return self.ts[-n:].copy(), self.raw[-n:].copy(), list(self.labels), self.srate
+
+    def filter_status(self):
+        return {"name": self.filter_spec["name"], "spec": self.filter_spec, "signature": self.running_signature,
+                "chosen_signature": self.filter_sig, "source": self.filter_source, "error": self.filter_error,
+                "summary": F.summary(self.filter.spec if self.filter is not None else self.filter_spec),
+                "reject_uv": self.reject_uv, "changed_at": self.filter_changed_at, "srate": self.srate or None}
 
     def snapshot(self, seconds):
         """Copy of the last `seconds` of (ts, filtered) data."""
@@ -260,7 +328,7 @@ class EEGEngine:
             if self.ts is None or len(self.ts) < self.srate * 2:
                 return
             n = int(2 * self.srate)
-            filt = self.filt[-n:]
+            filt = self.qfilt[-n:]
             raw = self.raw[-int(4 * self.srate):]
             labels = list(self.labels)
             srate = self.srate
@@ -305,6 +373,7 @@ class EEGEngine:
             out["analysis_error"] = f"numpy/scipy missing ({NUMPY_ERROR}); recording only. pip install numpy scipy"
         if self.scorer:
             out["scorer"] = self.scorer.status()
+        out["filters"] = self.filter_status()
         return out
 
 
@@ -336,6 +405,7 @@ class P300Scorer:
         self.model_source = "command line (--p300-model)" if model_path else "none"
         self.model_info = None
         self.live_cbs = set()
+        self.filters_reset_note = None
         self._live_keys = {}
         if model_path:
             try:
@@ -374,9 +444,26 @@ class P300Scorer:
             self.model_info = {"file": os.path.basename(path), "participants": meta.get("participants") or (
                 [meta["participant_id"]] if meta.get("participant_id") else []), "n_epochs": meta.get("n_epochs"),
                 "cv_answer_accuracy": meta.get("cv_answer_accuracy"), "simulated": meta.get("simulated"),
-                "channels": list(m.labels)}
+                "channels": list(m.labels), "filters": m.filters, "filter_signature": m.filter_signature,
+                "filter_summary": F.summary(m.filters)}
         if not quiet:
             print(f"  P300 model: {os.path.basename(path)} ({source})" + (f"  WARNING: {err}" if err else ""))
+
+    def filters_match(self):
+        """Is the trained model's filter chain the one running? (No model: True.)"""
+        return self.model is None or self.model.filter_signature == self.engine.running_signature
+
+    def on_filters_changed(self):
+        """The running chain changed, so features made before no longer match. The live calibration is rebuilt from the
+        trials whose EEG is still in the ring buffer (it was re-filtered); older trials drop out."""
+        with self.lock:
+            had = len(self.pool)
+            self.pool, self.adaptive = [], None
+            for key, t in self.trials.items():
+                if t.get("pooled") and key[0] == self.adaptive_session:
+                    t["pooled"] = False        # tick() re-cuts them from the re-filtered buffer if it still covers them
+            self.filters_reset_note = (f"Filters changed at {time.strftime('%H:%M:%S')}: live calibration rebuilt from the "
+                                       f"last {RING_SECONDS} s of EEG ({had} trial(s) were in it before).") if had else None
 
     def on_stream(self, labels):
         if self.model is not None:
@@ -438,7 +525,7 @@ class P300Scorer:
         ts, x = self.engine.window(min(onsets) + P.BASELINE[0] - 0.05)
         if ts is None or not len(ts):
             return None, None, None
-        eps = P.epochs(ts, x, onsets)
+        eps = P.epochs(ts, x, onsets, self.engine.reject_uv)
         rows = [(e.ravel(), int(f[2]), f[1]) for e, f in zip(eps, flashes) if e is not None]
         if not rows:
             return None, None, None
@@ -453,11 +540,12 @@ class P300Scorer:
         X = np.vstack([p["X"] for p in pool])
         y = np.concatenate([p["y"] for p in pool])
         labels = list(self.engine.labels)
-        m = P.LinearP300.fit(X, y, labels, meta={"trained_on": "live session", "session_id": self.adaptive_session,
+        m = P.LinearP300.fit(X, y, labels, filters=self.engine.filter.spec if self.engine.filter else None,
+                             meta={"trained_on": "live session", "session_id": self.adaptive_session,
                                                   "participant_id": self.adaptive_participant,
                                                   "simulated": bool(self.engine.info.get("simulated")),
                                                   "trained_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                                                  "n_trials": len(pool), "n_epochs": int(len(y))})
+                                   "n_trials": len(pool), "n_epochs": int(len(y))})
         ev = []
         for p in pool:
             sums, _, _ = P.option_evidence(p["options"], m.score(p["X"]), sorted(set(p["options"])))
@@ -499,7 +587,7 @@ class P300Scorer:
 
     def _pick(self):
         labels = list(self.engine.labels)
-        if self.mode in ("auto", "model") and self.model is not None and not self.model_error:
+        if self.mode in ("auto", "model") and self.model is not None and not self.model_error and self.filters_match():
             if not labels:          # no EEG stream yet: nothing to score, but status must not crash
                 return "model", self.model, None
             try:
@@ -513,7 +601,13 @@ class P300Scorer:
     def status(self):
         with self.lock:
             kind, _, _ = self._pick()
+            mismatch = None if self.filters_match() else (
+                "paused: it was trained with different filters ("
+                + "; ".join(F.summary(self.model.filters)) + ") than the running chain ("
+                + "; ".join(F.summary(self.engine.filter.spec if self.engine.filter else self.engine.filter_spec))
+                + "). Switch back to its chain, or calibrate a new model with these filters.")
             return {"mode": self.mode, "active": kind, "model_file": self.model_path, "model_error": self.model_error,
+                    "model_filter_mismatch": mismatch, "filters_reset_note": self.filters_reset_note,
                     "model_source": self.model_source, "model_info": self.model_info,
                     "adaptive_trials": len(self.pool),
                     "adaptive_ready": self.adaptive is not None,
@@ -532,7 +626,7 @@ class P300Scorer:
         ts, x = self.engine.window(min(onsets) + P.BASELINE[0] - 0.05)
         if ts is None or not len(ts):
             return {"error": "no EEG data for this trial"}
-        eps = P.epochs(ts, x, onsets)
+        eps = P.epochs(ts, x, onsets, self.engine.reject_uv)
         labels = list(self.engine.labels)
         scores = []
         for e in eps:

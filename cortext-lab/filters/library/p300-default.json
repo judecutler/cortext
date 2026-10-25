@@ -1,0 +1,14 @@
+{
+  "name": "P300 default",
+  "description": "Causal 0.5-20 Hz band-pass, order 2: the filter every model so far was trained with. Order 2 / 0.5 Hz keeps the P300 shape (1 Hz / order 4 flipped it).",
+  "reject_uv": 100.0,
+  "layers": [
+    {
+      "type": "bandpass",
+      "enabled": true,
+      "low": 0.5,
+      "high": 20.0,
+      "order": 2
+    }
+  ]
+}

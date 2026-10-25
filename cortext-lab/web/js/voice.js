@@ -16,7 +16,7 @@ export const DEFAULT_PERSONA =
   "read a participant's brain responses while answer options were presented one by one, and you announce its guess " +
   "out loud. Sound warm, curious and a little theatrical; start with a short thinking filler such as 'Hmm...' or 'Okay...'.";
 
-/** Mood presets for the narrator's context (Setup → Voice & narrator). The text is fully editable there. */
+/** Mood presets for the narrator's context (Agent → Result → Voice & narrator). The text is fully editable there. */
 export const NARRATOR_MOODS = [
   ['default', 'Warm & theatrical (default)', DEFAULT_PERSONA],
   ['sports', 'Sports commentator',
@@ -298,7 +298,7 @@ export class Voice {
   stopAll() { this.stopSources(); try { window.speechSynthesis?.cancel(); } catch { /* ignore */ } }
 }
 
-/** Browser voices for the Setup dropdown (they load asynchronously in Chrome). */
+/** Browser voices for the narrator voice dropdown (they load asynchronously in Chrome). */
 export function browserVoices() {
   return new Promise((res) => {
     const ss = window.speechSynthesis;

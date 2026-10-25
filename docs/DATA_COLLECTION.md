@@ -25,13 +25,13 @@ No headset? Run `python cortext-lab/eeg/fake_eeg.py` instead of terminal 1. It s
 
 ## 2. In the website
 
-1. **Setup tab → Headset card.** It should show the headset, 8 electrode chips and live traces. It auto-fills *Device* and sets *Predictor = Live EEG*.
+1. **Experiment tab → section 1 → Headset card.** It should show the headset, 8 electrode chips and live traces. It auto-fills *Device* and sets *Predictor = Live EEG*.
    - Fix any electrode marked **noisy** or **flat** before you start: add gel, press it on, ask the participant to relax their jaw and sit still.
    - Healthy is about 5–40 µV.
    - Your first screenshot (traces clipping past ±50 µV) would show most chips as noisy.
 2. Optional: open the **EEG** tab (button *Open in its own window*) and put it on a second screen for the audience. Never show it to the participant during flashing.
 3. Enter a **Participant ID**. Use a code like P01, never a real name, because this ends up in the shared dataset. Then open the **Experiment** tab, choose your settings (or a preset) and click **Start session**.
-4. When the session ends, open **Session summary**. The *Training dataset* card cleans the EEG and shows a quality report. **Upload to Hugging Face** sends only that session's folder (or tick *Upload automatically* on the Setup tab).
+4. When the session ends, open **Session summary**. The *Training dataset* card cleans the EEG and shows a quality report. **Upload to Hugging Face** sends only that session's folder (or tick *Upload automatically* under Experiment → Lab & data).
 5. If you mark trials invalid later on the Review page, the dataset is rebuilt automatically. Upload again to share the update.
 
 ## 3. For teammates training models

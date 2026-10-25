@@ -83,11 +83,11 @@ export function estimateDurations(s) {
   return { flashes, flashSec, trialSec, totalMin: (trialSec * s.n_trials) / 60 };
 }
 
-/** Save only some keys, keeping everything else as it is (Setup and Experiment each own part of the settings). */
+/** Save only some keys, keeping everything else as it is (the Experiment and Agent tabs each own part of the settings). */
 export function patchSettings(partial) { saveSettings({ ...loadSettings(), ...partial }); }
 
 const PARTICIPANT_KEY = 'cortext-lab.last-participant';
-/** Who is being recorded and with what: filled in on the Setup tab, read when an experiment starts. */
+/** Who is being recorded and with what: filled in on the Experiment tab, read when an experiment starts. */
 // display_name is for the narrator only ("I'm 78% sure Jude saw the dog"). It stays in this browser and is never written
 // to the session record, markers or dataset (the participant ID is what identifies a recording).
 export function loadParticipant() {
