@@ -8,8 +8,10 @@
 Models are saved to the team library (cortext-lab/models/library/, shared through git) named <participants>_<date>.npz.
 The bridge runs the one in cortext-lab/models/active/; pick it on the Setup page or use --activate (see models/README.md).
 
-It rebuilds features exactly the way the bridge computes them live (causal 0.5-20 Hz filter on the RAW recording,
-40 ms bins), so the saved model can be dropped into the bridge. Evaluation:
+It rebuilds features exactly the way the bridge computes them live (the running filter chain, causal, on the RAW
+recording; 40 ms bins), so the saved model can be dropped into the bridge. The chain is the one in
+cortext-lab/filters/active/ (what the Agent page shows), else the built-in 0.5-20 Hz default; pick another with
+--filters NAME_OR_FILE. The model stores its chain, and the bridge only uses it while that chain runs. Evaluation:
   * grouped cross-validation by trial (no trial is ever in train and test), epoch AUC + answer accuracy per trial
   * shuffled-label control (should sit at AUC 0.5 / chance accuracy; if it doesn't, something leaks)
   * leave-one-session-out when there are 2+ sessions (the number that matters for a new session)
@@ -28,20 +30,22 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "bridge"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "datasets", "cortext-p300"))
 import p300 as P  # noqa: E402
 import models  # noqa: E402
+import filters as F  # noqa: E402
 from build_session import dataset_root  # noqa: E402
 from cortext_data import list_sessions  # noqa: E402
 
 
-def live_features(root, session_folder):
+def live_features(root, session_folder, spec=None):
     """Features as the bridge computes them, for every flash epoch of one session (aligned with epochs.npz rows)."""
     raw = np.load(os.path.join(root, session_folder, "eeg_raw.npz"), allow_pickle=False)
     ep = np.load(os.path.join(root, session_folder, "epochs.npz"), allow_pickle=False)
     x, ts = raw["data"].T.astype(float), raw["times"]
     labels = [str(l) for l in raw["labels"]]
-    y = P.CausalFilter(float(raw["srate"]), x.shape[1])(x)
+    chain = F.Chain(spec or F.DEFAULT_SPEC, float(raw["srate"]), labels)
+    y = chain(x)
     feats, keep = [], []
     for i, onset in enumerate(ep["onset_lsl"]):
-        e = P.epoch(ts, y, float(onset))
+        e = P.epoch(ts, y, float(onset), chain.reject_uv)
         if e is not None:
             feats.append(e.ravel())
             keep.append(i)
@@ -49,6 +53,22 @@ def live_features(root, session_folder):
     sid = ep["session_id"][keep] if len(keep) else np.array([])
     return (np.array(feats), ep["y"][keep].astype(int), np.array([f"{s}:{t}" for s, t in zip(sid, ep["trial_id"][keep])]),
             ep["option_id"][keep], ep["trial_valid"][keep] & ~ep["rejected_artifact"][keep], labels, sid)
+
+
+def resolve_filters(arg):
+    """--filters value -> chain spec. None = what the bridge runs (filters/active/, else the built-in default)."""
+    if arg is None:
+        return F.active_chain()[0]
+    if arg.strip().lower() == "default":
+        return F.normalize(F.DEFAULT_SPEC)
+    if os.path.isfile(arg):
+        return F.read_file(arg)
+    name = F.safe_name(arg)
+    path = os.path.join(F.library_dir(), name)
+    if os.path.isfile(path):
+        return F.read_file(path)
+    have = ", ".join(n[:-5] for n in sorted(os.listdir(F.library_dir()))) if os.path.isdir(F.library_dir()) else "none"
+    sys.exit(f"--filters: no chain called {arg!r} (library: {have})")
 
 
 def answer_accuracy(scores, y, groups, options):
@@ -94,10 +114,15 @@ def main():
     ap.add_argument("--include-superseded", action="store_true", help="also use sessions that were redone in the app")
     ap.add_argument("-o", "--out", default=None,
                     help="where to save (default: cortext-lab/models/library/<participants>_<date>.npz, the team library)")
+    ap.add_argument("--filters", default=None,
+                    help="filter chain: a library name (e.g. p300-default), a .json path, or 'default' "
+                         "(default: the chain in cortext-lab/filters/active/, i.e. what the bridge runs)")
     ap.add_argument("--activate", action="store_true",
                     help="also make it the model the bridge runs (copies it into cortext-lab/models/active/)")
     a = ap.parse_args()
     root = a.root or dataset_root()
+    spec = resolve_filters(a.filters)
+    print(f"filters: {spec['name']}: {'; '.join(F.summary(spec))}")
 
     rows = list_sessions(root, a.include_simulated, include_superseded=a.include_superseded or bool(a.sessions))
     if a.sessions:
@@ -114,7 +139,10 @@ def main():
             sys.exit("no session with raw EEG on this machine")
     parts, labels = [], None
     for r in rows:
-        X, y, g, o, ok, lab, sid = live_features(root, r["folder"])
+        try:
+            X, y, g, o, ok, lab, sid = live_features(root, r["folder"], spec)
+        except F.FilterError as exc:
+            sys.exit(f"{r['session_id']}: the filter chain can't run on this recording: {exc}")
         if labels is None:
             labels = lab
         if lab != labels:
@@ -155,7 +183,7 @@ def main():
 
     used = [r for r in rows if r["session_id"] in set(np.unique(sids))]
     participants = sorted({str(r.get("participant_id")) for r in used if r.get("participant_id")})
-    model = P.LinearP300.fit(X, y, labels, meta={
+    model = P.LinearP300.fit(X, y, labels, filters=spec, meta={
         "trained_on": [r["session_id"] for r in used], "participants": participants,
         "simulated": any(r.get("simulated") for r in used), "trained_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "n_epochs": int(len(y)), "n_trials": int(n_trials), "chance": round(1 / n_opt, 3),

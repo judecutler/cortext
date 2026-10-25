@@ -1,0 +1,21 @@
+{
+  "name": "P300 + 60 Hz notch",
+  "description": "US mains notch in front of the default band-pass. The band-pass already damps 60 Hz by about 23 dB (at 250 Hz sampling); the notch helps when contact is poor and hum is large. Models trained with the default chain do NOT work with this one (different filters).",
+  "reject_uv": 100.0,
+  "layers": [
+    {
+      "type": "notch",
+      "enabled": true,
+      "freq": 60.0,
+      "q": 30.0,
+      "harmonics": 1
+    },
+    {
+      "type": "bandpass",
+      "enabled": true,
+      "low": 0.5,
+      "high": 20.0,
+      "order": 2
+    }
+  ]
+}

@@ -16,6 +16,8 @@ import shutil
 import tempfile
 import time
 
+import filters as F
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DIR = os.path.join(os.path.dirname(HERE), "models")
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -69,8 +71,9 @@ def resolve_startup(arg):
     return None, "none", None
 
 
-def describe(path, labels=None):
-    """Metadata for one model file. labels = the live EEG channels, to say whether the model fits this headset."""
+def describe(path, labels=None, filter_sig=None):
+    """Metadata for one model file. labels = the live EEG channels, to say whether the model fits this headset;
+    filter_sig = the running filter chain's signature, to say whether its filters match."""
     st = os.stat(path)
     info = {"file": os.path.basename(path), "size_kb": round(st.st_size / 1024, 1),
             "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime)), "mtime": st.st_mtime}
@@ -94,7 +97,11 @@ def describe(path, labels=None):
         "shuffled_accuracy": meta.get("shuffled_accuracy"), "chance": meta.get("chance"),
         "trained_at": meta.get("trained_at"), "simulated": meta.get("simulated"),
         "kind": "calibration" if trained_on == "live session" else "offline", "temperature": round(float(m.temperature), 2),
+        "filters": m.filters, "filter_name": m.filters["name"], "filter_summary": F.summary(m.filters),
+        "filter_signature": m.filter_signature,
     })
+    if filter_sig is not None:
+        info["fits_filters"] = m.filter_signature == filter_sig
     if labels:
         missing = [c for c in m.labels if c not in labels]
         info["fits_headset"] = not missing
@@ -103,10 +110,10 @@ def describe(path, labels=None):
     return info
 
 
-def _entries(group, folder, labels, active_name=None):
+def _entries(group, folder, labels, active_name=None, filter_sig=None):
     out = []
     for n in _npz(folder):
-        d = describe(os.path.join(folder, n), labels)
+        d = describe(os.path.join(folder, n), labels, filter_sig)
         d["id"] = f"{group}/{n}"
         d["group"] = group
         if active_name is not None:
@@ -115,14 +122,14 @@ def _entries(group, folder, labels, active_name=None):
     return out
 
 
-def listing(log_dir, labels=None):
+def listing(log_dir, labels=None, filter_sig=None):
     path, warn = active_model()
     active_name = os.path.basename(path) if path else None
     return {
         "models_dir": models_dir(),
-        "library": _entries("library", library_dir(), labels, active_name),
-        "calibration": [d for d in _entries("calibration", log_dir, labels) if d["file"].startswith("p300_adaptive_")],
-        "active": describe(path, labels) | {"id": f"active/{active_name}"} if path else None,
+        "library": _entries("library", library_dir(), labels, active_name, filter_sig),
+        "calibration": [d for d in _entries("calibration", log_dir, labels, None, filter_sig) if d["file"].startswith("p300_adaptive_")],
+        "active": describe(path, labels, filter_sig) | {"id": f"active/{active_name}"} if path else None,
         "active_warning": warn,
     }
 

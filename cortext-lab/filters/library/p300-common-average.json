@@ -1,0 +1,19 @@
+{
+  "name": "P300 + common average",
+  "description": "Experimental. Common average reference before the default band-pass removes noise shared by all electrodes. With only 8 electrodes the average contains some P300 itself, so check the target vs non-target waveform before trusting it.",
+  "reject_uv": 100.0,
+  "layers": [
+    {
+      "type": "reref",
+      "enabled": true,
+      "channels": []
+    },
+    {
+      "type": "bandpass",
+      "enabled": true,
+      "low": 0.5,
+      "high": 20.0,
+      "order": 2
+    }
+  ]
+}

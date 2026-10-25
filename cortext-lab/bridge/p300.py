@@ -9,8 +9,12 @@ different features than the live scorer gives it. So:
 
 Needs numpy + scipy (both already in the repo's requirements.txt).
 """
+import json
+
 import numpy as np
 from scipy.signal import butter, sosfilt, sosfilt_zi
+
+import filters as F
 
 BAND = (0.5, 20.0)        # Hz. Causal filters bend slow waves; 0.5 Hz / order 2 keeps the P300 shape (1 Hz/order 4 flipped it)
 TMIN, TMAX = 0.0, 0.8     # s after onset
@@ -26,7 +30,8 @@ UNICORN_MONTAGE = ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "POz", "PO8"]
 
 
 class CausalFilter:
-    """Band-pass that keeps its state between chunks (so a live stream and an offline pass give the same output)."""
+    """Band-pass that keeps its state between chunks (so a live stream and an offline pass give the same output).
+    The default filter chain (filters.DEFAULT_SPEC); the bridge itself now runs a filters.Chain."""
 
     def __init__(self, srate, n_channels, band=BAND, order=2):
         self.sos = butter(order, [band[0], band[1]], btype="bandpass", fs=srate, output="sos")
@@ -47,10 +52,11 @@ def n_bins():
     return int(round((TMAX - TMIN) * 1000 / BIN_MS))
 
 
-def epoch(ts, data, onset):
+def epoch(ts, data, onset, reject_uv=REJECT_UV):
     """Return a (n_channels, n_bins) baseline-corrected epoch for one onset, or None if the data doesn't cover it.
 
     ts: (n,) sample timestamps in seconds (sorted); data: (n, C) filtered microvolts; onset: seconds.
+    reject_uv: the running filter chain's artifact threshold (default REJECT_UV).
     """
     lo = np.searchsorted(ts, onset + BASELINE[0], "left")
     hi = np.searchsorted(ts, onset + TMAX, "right")
@@ -62,7 +68,7 @@ def epoch(ts, data, onset):
     if len(base) == 0:
         return None
     x = x - base.mean(axis=0)
-    if np.abs(x).max() > REJECT_UV:
+    if np.abs(x).max() > reject_uv:
         return None  # artifact (blink, movement, loose electrode): reject rather than let it drive the score
     nb = n_bins()
     idx = np.floor((t - TMIN) * 1000 / BIN_MS).astype(int)
@@ -75,9 +81,9 @@ def epoch(ts, data, onset):
     return out
 
 
-def epochs(ts, data, onsets):
-    """List of epochs (None where not covered)."""
-    return [epoch(ts, data, o) for o in onsets]
+def epochs(ts, data, onsets, reject_uv=REJECT_UV):
+    """List of epochs (None where not covered or rejected as an artifact)."""
+    return [epoch(ts, data, o, reject_uv) for o in onsets]
 
 
 def heuristic_score(ep, labels):
@@ -92,16 +98,23 @@ class LinearP300:
     """Shrinkage LDA on flattened epochs. score(x) is a log-likelihood ratio target vs non-target (Gaussian, shared cov).
 
     Saved/loaded as .npz so a model trained offline (eeg/train_p300.py) or adapted live can be reused.
+    `filters` is the filter chain (bridge/filters.py) its features were made with; the bridge only uses the model
+    while that chain runs. Files saved before chains existed were all made with filters.DEFAULT_SPEC.
     """
 
-    def __init__(self, w=None, b=0.0, mean=None, std=None, labels=None, temperature=1.0, meta=None):
+    def __init__(self, w=None, b=0.0, mean=None, std=None, labels=None, temperature=1.0, meta=None, filters=None):
         self.w, self.b, self.mean, self.std = w, b, mean, std
         self.labels = list(labels or [])
         self.temperature = temperature
         self.meta = dict(meta or {})
+        self.filters = F.normalize(filters or F.DEFAULT_SPEC)
+
+    @property
+    def filter_signature(self):
+        return F.signature(self.filters)
 
     @staticmethod
-    def fit(X, y, labels, meta=None):
+    def fit(X, y, labels, meta=None, filters=None):
         X = np.asarray(X, float)
         y = np.asarray(y, int)
         mean = X.mean(axis=0)
@@ -112,7 +125,7 @@ class LinearP300:
         cov, _ = ledoit_wolf(R)
         w = np.linalg.solve(cov, m1 - m0)
         b = -0.5 * w @ (m1 + m0)
-        return LinearP300(w, b, mean, std, labels, 1.0, meta)
+        return LinearP300(w, b, mean, std, labels, 1.0, meta, filters)
 
     def score(self, X):
         Z = (np.atleast_2d(X) - self.mean) / self.std
@@ -126,15 +139,27 @@ class LinearP300:
         return [labels.index(l) for l in self.labels]
 
     def save(self, path):
+        bp = next((l for l in self.filters["layers"] if l["enabled"] and l["type"] == "bandpass"), None)
+        band = (bp["low"], bp["high"]) if bp else (0.0, 0.0)   # informational only; filter_chain is what counts
         np.savez(path, w=self.w, b=self.b, mean=self.mean, std=self.std, labels=np.array(self.labels),
-                 temperature=self.temperature, band=np.array(BAND), tmin=TMIN, tmax=TMAX, bin_ms=BIN_MS,
-                 baseline=np.array(BASELINE), meta=np.array(repr(self.meta)))
+                 temperature=self.temperature, band=np.array(band), tmin=TMIN, tmax=TMAX, bin_ms=BIN_MS,
+                 baseline=np.array(BASELINE), meta=np.array(repr(self.meta)),
+                 filter_chain=np.array(json.dumps(self.filters)))
 
     @staticmethod
     def load(path):
         z = np.load(path, allow_pickle=False)
-        if float(z["bin_ms"]) != BIN_MS or float(z["tmax"]) != TMAX or tuple(z["band"]) != BAND:
-            raise ValueError("model was trained with different epoch/filter settings than this code uses")
+        if float(z["bin_ms"]) != BIN_MS or float(z["tmax"]) != TMAX:
+            raise ValueError("model was trained with different epoch settings than this code uses")
+        if "filter_chain" in z.files:
+            try:
+                filters = F.normalize(json.loads(str(z["filter_chain"])))
+            except (ValueError, F.FilterError) as exc:
+                raise ValueError(f"model's filter chain is unreadable: {exc}")
+        elif tuple(z["band"]) == BAND:
+            filters = F.normalize(F.DEFAULT_SPEC)    # saved before filter chains existed: the default chain
+        else:
+            raise ValueError("model was trained with different filter settings than this code uses")
         meta = {}
         try:
             import ast
@@ -142,7 +167,7 @@ class LinearP300:
         except Exception:
             pass
         return LinearP300(z["w"], float(z["b"]), z["mean"], z["std"], [str(l) for l in z["labels"]],
-                          float(z["temperature"]), meta)
+                          float(z["temperature"]), meta, filters)
 
 
 def ledoit_wolf(X):
