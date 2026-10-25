@@ -10,7 +10,9 @@ What it does (no calibration, no training data, works from trial 1):
   2. For each flash it measures the spike: mean voltage 240-480 ms after that picture appeared, averaged over the
      parietal/central electrodes where the P300 is biggest (Cz, Pz, POz, PO7, PO8), in microvolts.
   3. The spikes for each option are added up over the repeats; the option with the biggest total is the predicted
-     answer. Percentages = softmax(TEMPERATURE * total), deliberately soft so it doesn't shout "100%" on noise.
+     answer. In the bridge, percentages are measured against this trial's own noise (each total in standard errors,
+     softmax slope p300.P3000_Z_SLOPE, top capped at 90%), because a fixed TEMPERATURE said 96% on pure 1/f noise.
+     TEMPERATURE below is only used by code that scores the file like any other model.
 
 It is stored as a LinearP300 whose weights are exactly that window average, so the bridge, the Agent page's Model
 block and the narrator use it like any other model. It is built for the default 0.5-20 Hz filter chain (keep that

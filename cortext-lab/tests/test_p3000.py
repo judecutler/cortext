@@ -65,6 +65,43 @@ def run(model, p300_uv, seed):
     return hits / len(trials), float(np.mean(confs)), float(np.max(confs))
 
 
+def run_pink(model, p300_uv, seed, n_trials=80, repeats=3):
+    """Like run(), but with 1/f-like (AR(1)) background noise and the bridge's noise-normalised percentages."""
+    from scipy.signal import lfilter
+    rng = np.random.default_rng(seed)
+    opts = ("A", "B", "C", "D")
+    trials, t = [], 1.0
+    for _ in range(n_trials):
+        true = rng.choice(opts)
+        fl = []
+        for _ in range(repeats):
+            for o in rng.permutation(opts):
+                fl.append((t, o))
+                t += 1.3
+        trials.append((fl, true))
+        t += 2.0
+    n = int((t + 2) * SR)
+    ts = np.arange(n) / SR
+    x = lfilter([1], [1, -0.97], rng.normal(0, 2.0, (n, 8)), axis=0) + rng.normal(0, 4.0, (n, 8)) + 4000.0
+    k = np.arange(int(0.8 * SR)) / SR
+    p3 = np.exp(-0.5 * ((k - 0.35) / 0.07) ** 2)
+    for fl, true in trials:
+        for on, o in fl:
+            if o == true:
+                i = int(on * SR)
+                x[i:i + len(k)] += p300_uv * p3[:, None] * P300_W
+    y = P.CausalFilter(SR, 8)(x)
+    hits, confs = 0, []
+    for fl, true in trials:
+        eps = P.epochs(ts, y, [f[0] for f in fl])
+        scores = [None if e is None else float(model.score(e.ravel())[0]) for e in eps]
+        probs, _ = P.noise_normalised_probs([f[1] for f in fl], scores, list(opts))
+        best = max(probs, key=probs.get)
+        hits += best == true
+        confs.append(probs[best])
+    return hits / len(trials), float(np.mean(confs)), float(np.max(confs))
+
+
 def main():
     tmp = tempfile.mkdtemp()
     os.environ["CORTEXT_MODELS_DIR"] = tmp
@@ -86,6 +123,17 @@ def main():
         print(f"no P300 (control):   accuracy {acc0:.0%}, mean confidence {mean0:.0%}, max {max0:.0%}")
         assert acc0 <= 0.5, acc0
         assert mean0 < 0.5, mean0                   # stays modest on noise
+
+        # 1/f background noise (like eeg/fake_eeg.py and real EEG) makes a fixed slope overconfident; the bridge scores
+        # this model with noise-normalised, capped percentages instead (p300.noise_normalised_probs)
+        acc1, mean1, max1 = run_pink(m, 0.0, 3)
+        print(f"no P300, 1/f noise, bridge percentages: accuracy {acc1:.0%}, mean confidence {mean1:.0%}, max {max1:.0%}")
+        assert mean1 < 0.45 and max1 <= 0.75, (mean1, max1)
+        acc2, mean2, max2 = run_pink(m, 8.0, 4)
+        print(f"8 uV P300, 1/f noise, bridge percentages: accuracy {acc2:.0%}, mean confidence {mean2:.0%}, max {max2:.0%}")
+        assert acc2 >= 0.35 and max2 <= P.P3000_CAP + 1e-9, (acc2, max2)
+        c = P.cap_top({"A": 0.995, "B": 0.003, "C": 0.002, "D": 0.0})   # every live scorer's percentages are capped
+        assert abs(c["A"] - 0.9) < 1e-9 and abs(sum(c.values()) - 1) < 1e-9 and c["B"] > c["C"] > c["D"] == 0.0, c
         print("ok")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
