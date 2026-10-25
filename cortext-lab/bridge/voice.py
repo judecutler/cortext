@@ -193,10 +193,31 @@ if a["voice"]:
 e.setProperty("rate", int(e.getProperty("rate") * a["rate"]))
 e.save_to_file(a["text"], a["out"])
 e.runAndWait()
+# The engine can return before the file is filled, and the file stays empty if this process exits now: wait for a
+# non-zero size that has stopped changing (seen with espeak on Linux; harmless elsewhere).
+import os, time
+last, end = -1, time.time() + 4.0
+while time.time() < end:
+    size = os.path.getsize(a["out"]) if os.path.exists(a["out"]) else 0
+    if size > 0 and size == last:
+        break
+    last = size
+    time.sleep(0.1)
 """
 
 
 def _pyttsx3(text, voice, rate, out_path):
+    try:
+        _pyttsx3_once(text, voice, rate, out_path)
+    except VoiceError:
+        _pyttsx3_once(text, voice, rate, out_path)   # one retry: the engine occasionally produces nothing the first time
+
+
+def _pyttsx3_once(text, voice, rate, out_path):
+    try:
+        os.remove(out_path)
+    except OSError:
+        pass
     args = json.dumps({"text": text, "voice": voice, "rate": min(2.0, max(0.5, float(rate or 1))), "out": out_path})
     with _tts_lock:
         r = subprocess.run([sys.executable, "-c", _PYTTSX3_SCRIPT, args], capture_output=True, text=True, timeout=30)
