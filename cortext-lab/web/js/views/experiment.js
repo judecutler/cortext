@@ -182,7 +182,8 @@ export async function renderExperiment(root, app) {
   async function loadPreset() {
     const p = getPreset(presetSel.value);
     if (!p) return;
-    for (const [k, v] of Object.entries(p.settings)) {
+    // A preset that predates the imagery window has no imagery_ms: treat that as OFF so a value left in the form can't leak into it.
+    for (const [k, v] of Object.entries({ imagery_ms: 0, ...p.settings })) {
       const el = inputs[k];
       if (!el) continue;
       if (k === 'stimuli_source') { if ([...el.options].some((o) => o.value === v)) el.value = v; else toast(`The stimulus set “${String(v).replace(/^set:/, '')}” is not in this browser; upload it again to use this preset's list.`, 'warn'); continue; }

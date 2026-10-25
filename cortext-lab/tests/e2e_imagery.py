@@ -94,6 +94,15 @@ def main():
             assert not [m for m in ms if m["event"].startswith("imagery")], "imagery markers with the window off"
             assert any(m["event"] == "flash_on" for m in ms)
 
+            # a leftover imagery value must not leak into a loaded preset that predates the setting
+            set_participant(page, BASE, "IMG-preset")
+            page.wait_for_selector("text=12 items in 3 categories")
+            set_num(page, "Imagery window (ms)", 2500)
+            page.locator("select[aria-label=Preset]").select_option(index=0)
+            page.click("button:has-text('Load')")
+            page.wait_for_selector("text=Loaded")
+            assert field(page, "Imagery window (ms)").locator("input").input_value() == "0", "preset load left imagery on"
+
             for mode in ("mcq_flash", "mcq_sequential"):
                 t, ms = run_one(page, mode, IMAG_MS, shot=f"20_imagery_{mode}.png")
                 ev = [m["event"] for m in ms]
