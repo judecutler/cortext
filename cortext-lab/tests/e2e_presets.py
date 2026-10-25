@@ -21,7 +21,7 @@ def main():
             b = p.chromium.launch(); page = b.new_page(viewport={"width": 1300, "height": 900}, accept_downloads=True)
             page.on("pageerror", lambda e: errors.append(str(e)))
             set_participant(page, BASE, "PRE")
-            page.wait_for_selector("text=12 items in 3 categories")
+            page.wait_for_selector("text=11 items in 3 categories")
             # generate a list
             page.click("text=Generate from stimulus set")
             n = page.locator(".planrow").count(); assert n == 12, n

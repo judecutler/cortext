@@ -18,11 +18,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const cfg = JSON.parse(readFileSync(join(here, '../web/config/stimuli.json'), 'utf8'));
 cfg.byId = Object.fromEntries(cfg.items.map((i) => [i.id, i]));
 
-test('stimulus config is valid and has the promised 6/3/3 split', () => {
+test('stimulus config is valid and has the expected 4/4/3 split', () => {
   assert.deepEqual(validateStimuli(cfg), []);
   const n = (c) => cfg.items.filter((i) => i.category === c).length;
-  assert.equal(cfg.items.length, 12);
-  assert.deepEqual([n('animal'), n('object'), n('shape')], [6, 3, 3]);
+  assert.equal(cfg.items.length, 11);
+  assert.deepEqual([n('animal'), n('object'), n('shape')], [4, 4, 3]);
+  assert.ok(!cfg.byId.fish && !cfg.byId.frog, 'fish and frog were removed');
   for (const it of cfg.items) readFileSync(join(here, '../web', it.image)); // image files exist
 });
 
@@ -128,8 +129,9 @@ test('trial records: shuffled positions, ground truth, validity log never loses 
 });
 
 test('trial specs: balanced targets, 4 unique options incl. target, prompt filled', () => {
-  const specs = buildTrialSpecs(cfg, { n: 24, seed: 9 });
-  assert.equal(specs.length, 24);
+  const N = cfg.items.length * 2;   // every item twice as target
+  const specs = buildTrialSpecs(cfg, { n: N, seed: 9 });
+  assert.equal(specs.length, N);
   const count = {};
   for (const s of specs) {
     count[s.target_id] = (count[s.target_id] || 0) + 1;
@@ -334,7 +336,11 @@ test('plans: generate, rephrase, validate, convert to specs', () => {
 import { groups, categoryOrder, addCategory, renameCategory, deleteCategory, moveCategory, moveItem, removeItem, updateItem, addItems, planUses } from '../web/js/library.js';
 import { snapshot } from '../web/js/undo.js';
 
-const lib = () => ({ items: cfg.items.map((i) => ({ ...i })) });
+// Fixed fixture (the original 6/3/3 sample) so these tests check the editing logic, not whatever images the
+// shipped sample set happens to contain.
+const FIXTURE = [['animal', ['dog', 'cat', 'bird', 'fish', 'rabbit', 'frog']], ['object', ['cup', 'umbrella', 'house']], ['shape', ['circle', 'square', 'triangle']]]
+  .flatMap(([category, ids]) => ids.map((id) => ({ id, category, label: id, text: id[0].toUpperCase() + id.slice(1), image: `stimuli/${id}.svg` })));
+const lib = () => ({ items: FIXTURE.map((i) => ({ ...i })) });
 const names = (c, cat) => groups(c).find((g) => g.name === cat).items.map((i) => i.id);
 
 test('library: categories in first-appearance order; empty ones kept once listed', () => {

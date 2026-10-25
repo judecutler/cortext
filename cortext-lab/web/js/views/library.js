@@ -89,16 +89,21 @@ export async function renderLibrary(root, app) {
     if (!rec.readOnly) return true;
     try {
       const files = {};
+      const missing = [];
       const cfg = snapshot(rec.config);
       for (const it of cfg.items) {
         if (!it.image) continue;
-        const res = await fetch(it.image);
-        if (!res.ok) throw new Error(`could not read ${it.image}`);
+        // A missing or unreadable image must not block editing the whole set (e.g. a typo in stimuli.json):
+        // keep the item without its picture, say which ones, and carry on.
+        let res = null;
+        try { res = await fetch(it.image); } catch { /* treated as missing */ }
+        if (!res || !res.ok) { missing.push(`${label(it)} (${it.image})`); it.image = null; continue; }
         const blob = await res.blob();
         const name = base(it.image);
         files[name] = new File([blob], name, { type: blob.type || 'image/svg+xml' });
         it.image = name;
       }
+      if (missing.length) toast(`Could not find the picture for ${missing.join(', ')}. Kept as text only; use ✎ to give it an image.`, 'warn', 12000);
       cfg.categories = categoryOrder(cfg);
       const made = await saveSet('Sample set (my copy)', { config: cfg, files, source_files: [] });
       const wasUsed = loadSettings().stimuli_source === BUILTIN || !loadSettings().stimuli_source;

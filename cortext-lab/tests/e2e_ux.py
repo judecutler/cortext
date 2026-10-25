@@ -82,7 +82,7 @@ def main():
             src = page.evaluate("JSON.parse(localStorage.getItem('cortext-lab.settings.v1')).stimuli_source")
             assert src == "set:Sample set (my copy)", src
             stored = page.evaluate(IDB, ["stimulus_sets", "Sample set (my copy)"])
-            assert len(stored["files"]) == 12 and next(i for i in stored["config"]["items"] if i["id"] == "dog")["category"] == "shape"
+            assert len(stored["files"]) == 11 and next(i for i in stored["config"]["items"] if i["id"] == "dog")["category"] == "shape"
             assert page.locator(".note-banner").count() == 0, "no read-only banner on the copy"
 
             # undo / redo
@@ -128,11 +128,11 @@ def main():
             assert "circle" in ids_in(page, "animal")
             undo(page)
             page.wait_for_selector(".catbody[data-cat='shape']")
-            assert ids_in(page, "shape") == ["circle", "square", "triangle"]
+            assert ids_in(page, "shape") == ["circle", "square", "pentagram"]
 
             # the experiment page sees the edited set and its categories
             page.click("text=Configure & run")
-            page.wait_for_selector("text=13 items in 4 categories")
+            page.wait_for_selector("text=12 items in 4 categories")
             assert "Tools & things" in page.inner_text(".catchips")
 
             # ================= sessions: undo a discard, next, restart, redo =================
