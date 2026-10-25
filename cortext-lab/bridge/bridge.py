@@ -660,6 +660,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"ok": False, "error": f"could not write the models folder: {exc}"})
             if r is not None:
                 return self.send_json(r)
+        if path == "/api/eeg/sim":
+            if state.eeg is None:
+                return self.send_json({"ok": False, "error": "the bridge has no EEG engine (needs pylsl)"})
+            try:
+                return self.send_json({"ok": True, **state.eeg.set_sim(body.get("mode"), body.get("uv"))})
+            except (TypeError, ValueError) as exc:
+                return self.send_json({"ok": False, "error": str(exc)})
         if path == "/api/narrate":
             try:
                 return self.send_json(voice.narrate(body.get("provider"), body.get("facts") or {}, timeout=float(body.get("timeout", 6)), context=body.get("context")))
@@ -844,7 +851,8 @@ class Handler(SimpleHTTPRequestHandler):
             def finish():
                 base = {"type": "prediction", "trial_id": t["trial_id"], "category_scores": {},
                         "eeg_stream": (eng.info.get("name") if eng else None),
-                        "simulated": bool(eng and eng.info.get("simulated"))}
+                        "simulated": bool(eng and eng.info.get("simulated")),
+                        "sim_p300": (eng.sim_mode if eng else "off")}
                 if scorer is None or not eng.info.get("found"):
                     why = "no EEG stream" if (eng and scorer) else (eeg_engine.NUMPY_ERROR or "pylsl not installed")
                     send({**base, "best_option_id": None, "confidence": None, "p300": {}, "error": why})
@@ -888,6 +896,11 @@ def main():
                          "0.5-20 Hz band-pass). 'default' = ignore filters/active/. You can also switch on the Agent page.")
     ap.add_argument("--scorer", choices=["auto", "model", "adaptive", "heuristic"], default="auto",
                     help="auto: trained model if given, else adapt to this session after 5 trials, else a heuristic")
+    ap.add_argument("--sim-p300", choices=["off", "overlay", "replace"], default=None,
+                    help="decoder input for a demo with an unreliable headset: 'replace' = score simulated EEG with a "
+                         "simulated P300 on the true answer (the headset still drives the live visuals and is recorded); "
+                         "'overlay' = headset EEG + simulated P300. Also switchable on the Experiment tab's Headset card.")
+    ap.add_argument("--sim-p300-uv", type=float, default=None, help="simulated P300 amplitude in µV (default 15)")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -908,6 +921,13 @@ def main():
               + (f"\n  WARNING: {fwarn}" if fwarn else ""))
         if state.eeg.scorer is not None:
             state.eeg.scorer.model_source = model_source
+        if args.sim_p300 or args.sim_p300_uv is not None:
+            try:
+                state.eeg.set_sim(args.sim_p300, args.sim_p300_uv)
+            except ValueError as exc:
+                sys.exit(f"--sim-p300: {exc}")
+        if state.eeg.sim_mode != "off":
+            print(f"  Decoder input: simulated P300 ({state.eeg.sim_mode}, {state.eeg.sim_uv:g} µV)")
         print(f"  P300 model: {os.path.basename(model_path) if model_path else 'none (adapts to the session after 5 trials)'}"
               f"  [{model_source}]" + (f"\n  WARNING: {model_warn}" if model_warn else ""))
         if state.eeg.scorer is not None and state.eeg.scorer.model_error:

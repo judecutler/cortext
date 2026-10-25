@@ -44,6 +44,28 @@ calibrated model in Agent → Model when you have one. Start is refused (with a 
 the bridge; for testing without a headset run `eeg/fake_eeg.py`, or choose Mock on the Agent tab. "Reset design" on the
 Experiment tab returns the design to these values (predictor and narrator are on the Agent tab). `tests/e2e_showtime.py` runs exactly this flow from a fresh browser.
 
+## Demo with an unreliable headset: simulated P300 for the decoder
+
+The headset streams as usual and drives every live visual (EEG waves, electrode chips, brain map) and the
+recording; only the **decoder's input** changes. Switch it on the Experiment tab's Headset card (**Decoder input**),
+or start the bridge with it:
+
+```bash
+python bridge/bridge.py --sim-p300 replace            # amplitude: --sim-p300-uv 15 (default)
+```
+- **Headset EEG** (`off`): normal.
+- **Simulated P300** (`replace`): the decoder scores simulated background EEG with a P300 ~350 ms after each picture
+  of the true answer (taken from the marker, like `eeg/fake_eeg.py`). Everything downstream is the real pipeline:
+  the running filter chain, the p3000 function or a calibrated model, live calibration, percentages, narrator, and the
+  target vs non-target waveform. Measured: the p3000 function goes from 17% on a broken (no-P300, 40 µV noise)
+  headset to 88% at 15 µV (`tests/test_sim_p300.py`); about 78% at 15 µV and 85% at 20 µV in longer simulations.
+- **Headset EEG + simulated P300** (`overlay`): adds the simulated P300 to the headset's own signal. Only useful if
+  the headset signal is clean; on a noisy one, use `replace`.
+
+No on-screen labels change (the presenter explains it). The data keeps it: each prediction carries `sim_p300`
+(`trials.csv` column `prediction_sim_p300`) and a model calibrated meanwhile has `sim_p300` in its metadata. Since the
+decoder reads the true answer, accuracy in these modes is not a result. The setting lasts until the bridge restarts.
+
 ## Demo with a Muse headband instead of the 8-channel headset
 
 ```bash

@@ -34,6 +34,23 @@ except Exception as exc:  # numpy/scipy missing
 BANDS = {"delta": (1, 4), "theta": (4, 8), "alpha": (8, 13), "beta": (13, 30)}
 RING_SECONDS = 90
 
+# ---- simulated P300 for the decoder (demo with an unreliable headset) ----
+# off     : the decoder scores the headset's EEG (normal)
+# overlay : headset EEG + a simulated P300 added ~350 ms after each flash of the TRUE answer
+# replace : the decoder scores simulated EEG (background noise + simulated P300); the headset still drives every
+#           live visual (waves, electrode chips, brain map) and is still recorded to disk untouched.
+# Either way the P300 comes from the marker's is_target, like eeg/fake_eeg.py, so accuracy in these modes is not
+# evidence. The UI stays clean (the presenter explains it); every prediction and calibrated model carries
+# "sim_p300": <mode> in its data so analysis can tell these apart.
+SIM_MODES = ("off", "overlay", "replace")
+SIM_DEFAULT_UV = 15.0
+SIM_NOISE_UV = 8.0
+# per-electrode weights (P300: parietal-central / Muse temporo-parietal; VEP: occipital), as in fake_eeg.py
+SIM_P300_W = {"Fz": .3, "C3": .5, "Cz": .8, "C4": .5, "Pz": 1., "PO7": .6, "POz": .9, "PO8": .6, "Oz": .5, "O1": .4, "O2": .4,
+              "P3": .8, "P4": .8, "CPz": .9, "TP9": 1., "TP10": 1., "AF7": .3, "AF8": .3, "Fp1": .2, "Fp2": .2}
+SIM_VEP_W = {"Fz": .1, "C3": .2, "Cz": .2, "C4": .2, "Pz": .5, "PO7": .9, "POz": 1., "PO8": .9, "Oz": 1., "O1": 1., "O2": 1.,
+             "TP9": .4, "TP10": .4, "AF7": .1, "AF8": .1}
+
 
 def _labels_from_info(info, n):
     labels, units = [], []
@@ -99,6 +116,15 @@ class EEGEngine:
         self.samples_recorded = 0
         self.scorer = P300Scorer(self, model_path, scorer_mode, log_dir) if P else None
         self.evidence = None   # latest live/final per-option evidence (for the neural monitor page)
+        mode = os.environ.get("CORTEXT_SIM_P300", "off").strip().lower() or "off"
+        self.sim_mode = mode if mode in SIM_MODES else "off"
+        try:
+            self.sim_uv = float(os.environ.get("CORTEXT_SIM_P300_UV", SIM_DEFAULT_UV))
+        except ValueError:
+            self.sim_uv = SIM_DEFAULT_UV
+        self.simraw = self.simf = None   # simulated background EEG (raw / filtered by a copy of the chain), same stamps
+        self.sim_filter = None
+        self._sim_reset()
 
     # ---------- session recording ----------
     def start_session(self, session_id):
@@ -222,6 +248,7 @@ class EEGEngine:
             self.ts = self.raw = self.filt = self.qfilt = None
             self.qfilter = P.CausalFilter(self.srate, n) if P else None
             self.filter = self._build_chain(self.filter_spec) if P else None
+            self._sim_reset()
             self.info = {"found": True, "name": full.name(), "type": full.type(), "channels": n, "labels": labels,
                          "nominal_srate": self.srate, "measured_srate": None, "age_ms": None, "simulated": simulated,
                          "source_id": full.source_id(), "hostname": full.hostname(),
@@ -299,16 +326,89 @@ class EEGEngine:
             t = np.asarray(stamps, float)
             y = self.filter(x)
             q = self.qfilter(x)
+            if self._sim_phase is None or len(self._sim_phase) != x.shape[1] or self.sim_filter is None:
+                self._sim_reset()                      # (e.g. labels/filter set without _connect): keep buffers aligned
+                if self.ts is not None:
+                    self.simraw, self.simf = np.zeros_like(self.raw), np.zeros_like(self.filt)
+            sr = self._sim_noise(t)
+            sf = self.sim_filter(sr)
             if self.ts is None:
-                self.ts, self.raw, self.filt, self.qfilt = t, x, y, q
+                self.ts, self.raw, self.filt, self.qfilt, self.simraw, self.simf = t, x, y, q, sr, sf
             else:
                 self.ts = np.concatenate([self.ts, t])
                 self.raw = np.concatenate([self.raw, x])
                 self.filt = np.concatenate([self.filt, y])
                 self.qfilt = np.concatenate([self.qfilt, q])
+                self.simraw = np.concatenate([self.simraw, sr])
+                self.simf = np.concatenate([self.simf, sf])
             keep = int(RING_SECONDS * self.srate)
             if len(self.ts) > 2 * keep:
                 self.ts, self.raw, self.filt, self.qfilt = self.ts[-keep:], self.raw[-keep:], self.filt[-keep:], self.qfilt[-keep:]
+                self.simraw, self.simf = self.simraw[-keep:], self.simf[-keep:]
+
+    # ---------- simulated P300 (see SIM_MODES) ----------
+    def _sim_reset(self):
+        """New stream (or startup): fresh simulated-noise generator and a copy of the running chain to filter it."""
+        n = len(self.labels)
+        self.simraw = self.simf = None
+        self._sim_rng = np.random.default_rng() if np is not None else None
+        self._sim_zi = None
+        self._sim_phase = self._sim_rng.uniform(0, 2 * np.pi, n) if (np is not None and n) else None
+        self._sim_alpha_w = np.array([SIM_VEP_W.get(l, .5) for l in self.labels]) if np is not None else None
+        self._sim_p300_w = np.array([SIM_P300_W.get(l, .7) for l in self.labels]) if np is not None else None
+        self._sim_vep_w = np.array([SIM_VEP_W.get(l, .3) for l in self.labels]) if np is not None else None
+        self.sim_filter = F.Chain(self.filter.spec, self.srate, self.labels) if (P and self.filter is not None) else None
+
+    def _sim_noise(self, t):
+        """Simulated background EEG for the stamps t: 1/f-ish (AR(1)) + white noise + 10 Hz alpha, like fake_eeg.py."""
+        from scipy.signal import lfilter
+        k, n = len(t), len(self.labels)
+        rng = self._sim_rng
+        if self._sim_zi is None:
+            self._sim_zi = np.zeros((1, n))
+        pink, self._sim_zi = lfilter([1.0], [1.0, -0.97], rng.normal(0, SIM_NOISE_UV * 0.25, (k, n)), axis=0, zi=self._sim_zi)
+        alpha = 6 * self._sim_alpha_w * np.sin(2 * np.pi * 10 * t[:, None] + self._sim_phase)
+        return pink + rng.normal(0, SIM_NOISE_UV * 0.5, (k, n)) + alpha
+
+    def _sim_bumps(self, ts):
+        """The simulated evoked responses for stamps ts: a small visual response to every flash and a P300 ~350 ms after
+        each flash of the true answer (read from the marker's is_target, as fake_eeg.py does)."""
+        out = np.zeros((len(ts), len(self.labels)))
+        sc = self.scorer
+        if sc is None or not len(ts):
+            return out
+        lo, hi = ts[0] - 0.9, ts[-1]
+        with sc.lock:
+            fl = [(f[0], f[2]) for t in sc.trials.values() for f in t["flashes"] if lo < f[0] < hi]
+        for onset, is_t in fl:
+            i0, i1 = np.searchsorted(ts, onset), np.searchsorted(ts, onset + 0.9)
+            if i1 <= i0:
+                continue
+            dt = (ts[i0:i1] - onset)[:, None]
+            out[i0:i1] += 3 * self._sim_vep_w * (np.exp(-((dt - 0.1) / 0.03) ** 2) - 0.8 * np.exp(-((dt - 0.17) / 0.04) ** 2))
+            if is_t and self.sim_uv:
+                out[i0:i1] += self.sim_uv * self._sim_p300_w * np.exp(-((dt - 0.35) / 0.08) ** 2)
+        return out
+
+    def set_sim(self, mode=None, uv=None):
+        """Switch the decoder's input (SIM_MODES) and/or the simulated P300 amplitude, from the next prediction on."""
+        if mode is not None:
+            mode = str(mode).lower()
+            if mode not in SIM_MODES:
+                raise ValueError(f"sim mode must be one of {', '.join(SIM_MODES)}")
+        if uv is not None:
+            uv = float(uv)
+            if not 0 <= uv <= 50:
+                raise ValueError("simulated P300 amplitude must be 0-50 µV")
+        with self.lock:
+            if mode is not None:
+                self.sim_mode = mode
+            if uv is not None:
+                self.sim_uv = uv
+        return self.sim_status()
+
+    def sim_status(self):
+        return {"mode": self.sim_mode, "uv": self.sim_uv, "modes": list(SIM_MODES)}
 
     # ---------- filter chain ----------
     def _build_chain(self, spec):
@@ -345,6 +445,9 @@ class EEGEngine:
                 self.filter = self._build_chain(spec)
                 if self.raw is not None and len(self.raw):
                     self.filt = self.filter(self.raw)
+                self.sim_filter = F.Chain(self.filter.spec, self.srate, self.labels)
+                if self.simraw is not None and len(self.simraw):
+                    self.simf = self.sim_filter(self.simraw)
             changed = old_sig != self.running_signature
         if changed and self.scorer:
             self.scorer.on_filters_changed()
@@ -373,11 +476,23 @@ class EEGEngine:
             return self.ts[-n:].copy(), self.filt[-n:].copy()
 
     def window(self, t_from):
+        """(ts, filtered µV) from t_from to now: what the decoder scores. With a sim mode on, the simulated P300 is
+        added here (and in 'replace' the headset EEG is swapped for simulated background EEG); the live visuals
+        (snapshot/trace) and the recording always stay on the headset's own signal."""
         with self.lock:
             if self.ts is None:
                 return None, None
             i = np.searchsorted(self.ts, t_from)
-            return self.ts[i:].copy(), self.filt[i:].copy()
+            ts = self.ts[i:].copy()
+            mode = self.sim_mode
+            if mode == "replace" and self.simf is not None:
+                x = self.simf[i:].copy()
+            else:
+                x = self.filt[i:].copy()
+        if mode != "off":
+            x += self._sim_bumps(ts)
+        return ts, x
+
 
     def last_ts(self):
         with self.lock:
@@ -429,6 +544,7 @@ class EEGEngine:
 
     def status(self):
         out = dict(self.info)
+        out["sim_p300"] = self.sim_status()
         if NUMPY_ERROR:
             out["analysis_error"] = f"numpy/scipy missing ({NUMPY_ERROR}); recording only. pip install numpy scipy"
         if self.scorer:
@@ -604,6 +720,7 @@ class P300Scorer:
                              meta={"trained_on": "live session", "session_id": self.adaptive_session,
                                                   "participant_id": self.adaptive_participant,
                                                   "simulated": bool(self.engine.info.get("simulated")),
+                                                  "sim_p300": self.engine.sim_mode,
                                                   "trained_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                                    "n_trials": len(pool), "n_epochs": int(len(y))})
         ev = []

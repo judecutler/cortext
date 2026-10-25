@@ -5,6 +5,9 @@
     python tests/e2e_showtime.py --p300-uv 0  # control: no P300 in the signal (should sit near chance, modest %)
     python tests/e2e_showtime.py --muse       # the same demo on a simulated Muse (4 ch + AUX, 256 Hz): the bridge
                                               # must swap in the Muse p3000 function and its filter chain by itself
+    python tests/e2e_showtime.py --p300-uv 0 --sim-p300 replace
+                                              # "broken headset" (no P300 in its signal): the decoder scores the
+                                              # simulated P300 instead; also flips the Headset card's Decoder input
 
 Checks the defaults are the demo flow (one at a time x3, 5 s question read aloud, Live EEG, narrator before the click),
 that the running model is the p3000 function from the first trial (no calibration), that each trial goes question ->
@@ -43,7 +46,7 @@ def phase(page, ph, timeout=60000):
 def report(rows, a):
     hits = sum(r["correct"] for r in rows)
     confs = [r["conf"] for r in rows]
-    print(f"SIMULATED {a.p300_uv} uV P300, p3000 function, {a.trials} questions: {hits}/{a.trials} correct (chance {a.trials / 4:.0f}), "
+    print(f"SIMULATED {a.p300_uv} uV P300{f' + decoder sim-p300 {a.sim_p300}' if a.sim_p300 else ''}, p3000 function, {a.trials} questions: {hits}/{a.trials} correct (chance {a.trials / 4:.0f}), "
           f"stated confidence mean {sum(confs) / len(confs):.0%}, max {max(confs):.0%}")
     print("seconds per question (prompt + read-aloud + 12 pictures + scoring + narration, operator click instant):",
           [r["s"] for r in rows], flush=True)
@@ -54,6 +57,7 @@ def main():
     ap.add_argument("--p300-uv", type=float, default=5.0)
     ap.add_argument("--trials", type=int, default=8)
     ap.add_argument("--muse", action="store_true", help="simulate a Muse headband instead of the 8-channel Unicorn")
+    ap.add_argument("--sim-p300", choices=["off", "overlay", "replace"], default=None, help="bridge --sim-p300")
     a = ap.parse_args()
     tmp = tempfile.mkdtemp(prefix="cortext-show-")
     env = {**os.environ, "CORTEXT_DATASET_DIR": os.path.join(tmp, "ds"), "CORTEXT_DATA_DIR": os.path.join(tmp, "data"),
@@ -61,7 +65,8 @@ def main():
     fake = subprocess.Popen([sys.executable, os.path.join(ROOT, "eeg", "fake_eeg.py"), "--seed", "11", "--p300-uv", str(a.p300_uv)]
                             + (["--muse"] if a.muse else []),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    bridge = subprocess.Popen([sys.executable, os.path.join(ROOT, "bridge", "bridge.py"), "--port", str(PORT)], env=env,
+    bridge = subprocess.Popen([sys.executable, os.path.join(ROOT, "bridge", "bridge.py"), "--port", str(PORT)]
+                              + (["--sim-p300", a.sim_p300] if a.sim_p300 else []), env=env,
                               stdout=open(os.path.join(tmp, "bridge.log"), "w"), stderr=subprocess.STDOUT)
     errors = []
     try:
@@ -99,6 +104,14 @@ def main():
             assert {k: s[k] for k in want} == want, {k: s[k] for k in want}
             print("fresh browser defaults = the demo flow:", want)
 
+            if a.sim_p300:      # the operator control on the Headset card mirrors the bridge, and switches it
+                sel = page.locator("#headset select.sim-mode")
+                page.wait_for_function(f"document.querySelector('#headset select.sim-mode')?.value === '{a.sim_p300}'", timeout=15000)
+                sel.select_option("overlay")
+                page.wait_for_function("fetch('/api/status').then(r => r.json()).then(s => s.eeg.sim_p300.mode === 'overlay')", timeout=5000)
+                sel.select_option(a.sim_p300)
+                page.wait_for_function(f"fetch('/api/status').then(r => r.json()).then(s => s.eeg.sim_p300.mode === '{a.sim_p300}')", timeout=5000)
+                print(f"Headset card Decoder input shows and switches the bridge ({a.sim_p300} -> overlay -> {a.sim_p300}): OK")
             page.fill("input[placeholder='e.g. P01']", "P01")
             page.fill("input[placeholder='e.g. Jude (optional)']", "Jude")
             page.wait_for_selector("#agentSummary >> text=Live EEG")
@@ -123,6 +136,7 @@ def main():
                 best = pred.get("best_option_id")
                 pct = round(100 * probs.get(best, 0))
                 assert pred.get("source") == "eeg" and pred.get("scorer") == "model", pred
+                assert pred.get("sim_p300") == (a.sim_p300 or "off"), pred
                 assert f"{pct}%" in cap and "Simulated EEG" in cap and "mock" not in cap, (cap, pct)   # real headset: "Based on Jude's brain waves..." (voice.test.mjs)
                 assert narr.get("simulated") is True
                 assert "Jude" not in narr["text"], narr    # the display name is never stored with the trial

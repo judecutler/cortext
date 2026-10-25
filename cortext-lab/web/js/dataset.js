@@ -19,9 +19,14 @@ function slimTrial(t) {
     options: (options || []).map(({ id, category, position, label, is_target }) => ({ id, category, position, label, is_target })),
     option_ids_by_position: (options || []).slice().sort((a, b) => a.position - b.position).map((o) => o.id).join('|'),
     prediction_best_option_id: t.prediction?.best_option_id ?? '', prediction_source: t.prediction?.source ?? '',
+    prediction_sim_p300: t.prediction?.sim_p300 ?? '',   // decoder input: off | overlay | replace (simulated P300)
     model_shown_before_click: !!t.model_display,
   };
 }
+
+/** Decoder input: 'off' (headset EEG) | 'overlay' (headset + simulated P300) | 'replace' (simulated P300 on
+ * simulated background EEG; the headset still drives the visuals). uv = simulated P300 amplitude. */
+export async function setSimP300({ mode, uv } = {}) { return post('/api/eeg/sim', { mode, uv }); }
 
 async function payload(sessionId) {
   const { session, trials } = await loadSession(sessionId);
