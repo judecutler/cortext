@@ -147,6 +147,15 @@ tr.invalid td { opacity: .5; }
 .evrow.best .evbar i { background: linear-gradient(90deg, #a855f7, #ff2bd6); }
 .evrow.best .evlab { color: var(--accent2); }
 .evpct { text-align: right; color: #bff8ff; }
+/* vibe meter (EEG tab, for fun); every selector is scoped to .vibe* so nothing else is affected */
+.vibe-panel.dim .vibes { opacity: .45; }
+.vibes { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.vibe-row { display: grid; grid-template-columns: 96px 1fr 30px 84px; gap: 8px; align-items: center; font: 600 13px var(--mono); }
+.vibe-bar { position: relative; height: 14px; border-radius: 7px; background: rgba(255, 255, 255, .05); overflow: hidden; }
+.vibe-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #00e5ff, #a855f7); box-shadow: 0 0 14px rgba(0, 229, 255, .45); transition: width .6s ease; }
+.vibe-mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: rgba(255, 255, 255, .35); }
+.vibe-num { text-align: right; color: #bff8ff; }
+.vibe-note { min-height: 1.3em; }
 @media (max-width: 1200px) { .mon-grid { grid-template-columns: 1fr 1fr; } .map-panel { grid-row: auto; grid-column: span 2; } }
 
 /* =====================================================================================================

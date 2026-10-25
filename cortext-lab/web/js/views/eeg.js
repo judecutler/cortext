@@ -74,8 +74,17 @@ export function renderEeg(root, app) {
   }
 
   feed.on(draw);
+  // Optional "vibe meter" (just-for-fun band-power estimates). Loaded on its own and fully isolated: read-only, own
+  // try/catch, appended after the existing panels, so if it fails the rest of the monitor is unaffected.
+  let detachVibes = null, gone = false;
+  import('../statepanel.js').then(({ createStatePanel }) => {
+    if (gone) return;
+    const p = createStatePanel(feed);
+    detachVibes = p.detach;
+    root.querySelector('.mon-grid')?.append(p.el);
+  }).catch((e) => console.warn('vibe meter unavailable', e));
   const offBridge = app.bridge.onChange(() => {});
   const onResize = () => draw();
   window.addEventListener('resize', onResize);
-  return () => { feed.stop(); offBridge(); window.removeEventListener('resize', onResize); };
+  return () => { gone = true; if (detachVibes) detachVibes(); feed.stop(); offBridge(); window.removeEventListener('resize', onResize); };
 }
