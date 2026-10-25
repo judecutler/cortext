@@ -108,6 +108,7 @@ export function headsetCard(app, { onFirstStream } = {}) {
       const fl = eeg.filters || {};
       hsStatus.innerHTML = `<span class="dot ${eeg.simulated ? 'amber' : 'green'}"></span><b>${eeg.device || eeg.name}</b>${eeg.simulated ? ' <span class="pill warn">SIMULATED</span>' : ''}` +
         `<div class="muted small mono">${eeg.channels} ch · ${eeg.measured_srate ?? '…'} Hz · ${(eeg.labels || []).join(' ')}${eeg.delay_ms != null ? ` · delay ${eeg.delay_ms} ms` : ''}</div>` +
+        (sim ? `<div class="small">Decoder input: <b>${sim.decoder_input}</b></div>` : '') +
         `<div class="muted small mono">Agent: ${(fl.summary || []).join(' → ') || 'filters ?'} → ${sc.active ?? '–'}${sc.model_file ? ` (${sc.model_file.split(/[\\/]/).pop()})` : ''}</div>` +
         (sc.model_filter_mismatch ? `<div class="warn small">Model ${sc.model_filter_mismatch}</div>` : '') +
         (fl.error ? `<div class="warn small">${fl.error}</div>` : '') +
